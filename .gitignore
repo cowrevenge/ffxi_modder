@@ -1,2 +1,7 @@
 target/
 *.DAT
+
+# HD pass: model weights are downloaded, not committed
+*.pth
+__pycache__/
+*.rgba

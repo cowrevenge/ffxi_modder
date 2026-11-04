@@ -196,3 +196,128 @@ pub fn recolor_dxt3(source: &[u8], rgba: &[u8]) -> Result<Vec<u8>, TextureWriteE
     }
     Ok(out)
 }
+
+const ALPHA_NIBBLE_MAX: u8 = 15;
+const ALPHA_NIBBLE_STEP: u16 = 17;
+const PCA_ITERATIONS: usize = 8;
+
+/// One DXT color block with endpoints on the block's principal colour axis
+/// (power iteration on the covariance), so gradients that are not grey keep
+/// their hue; falls back to the luma pair when the block is flat.
+pub fn encode_color_block_pca(texels: &[[u8; 4]; 16]) -> [u8; DXT_COLOR_BYTES] {
+    let px: Vec<[f32; 3]> = texels.iter().map(|t| [t[0] as f32, t[1] as f32, t[2] as f32]).collect();
+    let mean = px.iter().fold([0.0f32; 3], |a, p| [a[0] + p[0], a[1] + p[1], a[2] + p[2]]).map(|v| v / 16.0);
+    let mut cov = [[0.0f32; 3]; 3];
+    for p in &px {
+        let d = [p[0] - mean[0], p[1] - mean[1], p[2] - mean[2]];
+        for i in 0..3 {
+            for j in 0..3 {
+                cov[i][j] += d[i] * d[j];
+            }
+        }
+    }
+    let mut axis = [1.0f32, 1.0, 1.0];
+    for _ in 0..PCA_ITERATIONS {
+        let n = [0, 1, 2].map(|i| cov[i][0] * axis[0] + cov[i][1] * axis[1] + cov[i][2] * axis[2]);
+        let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+        if len < f32::EPSILON {
+            return encode_color_block(texels);
+        }
+        axis = n.map(|v| v / len);
+    }
+    let proj = |p: &[f32; 3]| (p[0] - mean[0]) * axis[0] + (p[1] - mean[1]) * axis[1] + (p[2] - mean[2]) * axis[2];
+    let (lo, hi) = px.iter().map(proj).fold((f32::MAX, f32::MIN), |(a, b), t| (a.min(t), b.max(t)));
+    let at = |t: f32| [0, 1, 2].map(|i| (mean[i] + axis[i] * t).clamp(0.0, 255.0) as u8);
+    let mut block = *texels;
+    block[0][..3].copy_from_slice(&at(hi));
+    block[1][..3].copy_from_slice(&at(lo));
+    let pair = encode_color_block(&[block[0], block[1], block[0], block[1], block[0], block[1], block[0], block[1], block[0], block[1], block[0], block[1], block[0], block[1], block[0], block[1]]);
+    let (c0, c1) = (u16::from_le_bytes([pair[0], pair[1]]), u16::from_le_bytes([pair[2], pair[3]]));
+    if c0 == c1 {
+        return pair;
+    }
+    let (e0, e1) = (expand565(c0), expand565(c1));
+    let palette: [[f32; 3]; 4] = [
+        e0,
+        e1,
+        [0, 1, 2].map(|i| e0[i] * 2.0 / 3.0 + e1[i] / 3.0),
+        [0, 1, 2].map(|i| e0[i] / 3.0 + e1[i] * 2.0 / 3.0),
+    ];
+    let mut indices = 0u32;
+    for (i, p) in px.iter().enumerate() {
+        let best = (0..4)
+            .min_by(|&a, &b| {
+                let d = |k: usize| (0..3).map(|c| (palette[k][c] - p[c]).powi(2)).sum::<f32>();
+                d(a).total_cmp(&d(b))
+            })
+            .expect("palette has entries");
+        indices |= (best as u32) << (INDEX_BITS * i as u32);
+    }
+    let mut out = [0u8; DXT_COLOR_BYTES];
+    out[..2].copy_from_slice(&c0.to_le_bytes());
+    out[2..4].copy_from_slice(&c1.to_le_bytes());
+    out[4..].copy_from_slice(&indices.to_le_bytes());
+    out
+}
+
+/// A full DXT3 body from `rgba` (`width` x `height`, alpha as the texture
+/// stores it), header copied from `template` (a retail DXT3 body) with the
+/// name, size and data-size fields rewritten.
+pub fn encode_dxt3(
+    template: &[u8],
+    name: [u8; TEXTURE_NAME_BYTES],
+    width: u32,
+    height: u32,
+    rgba: &[u8],
+) -> Result<Vec<u8>, TextureWriteError> {
+    let solid = solid_dxt3(template, name, width, height, [0; 3])?;
+    if rgba.len() != (width * height * 4) as usize {
+        return Err(TextureWriteError::Dimensions { width, height });
+    }
+    let (bw, bh) = ((width / DXT_BLOCK_TEXELS) as usize, (height / DXT_BLOCK_TEXELS) as usize);
+    let mut out = solid[..DXT3_HEADER_BYTES].to_vec();
+    for by in 0..bh {
+        for bx in 0..bw {
+            let mut texels = [[0u8; 4]; 16];
+            for (i, t) in texels.iter_mut().enumerate() {
+                let (x, y) = (bx * 4 + i % 4, by * 4 + i / 4);
+                let o = (y * width as usize + x) * 4;
+                t.copy_from_slice(&rgba[o..o + 4]);
+            }
+            let mut alpha = [0u8; DXT3_ALPHA_BYTES];
+            for (i, t) in texels.iter().enumerate() {
+                let nib = ((u16::from(t[3]) + ALPHA_NIBBLE_STEP / 2) / ALPHA_NIBBLE_STEP).min(u16::from(ALPHA_NIBBLE_MAX)) as u8;
+                alpha[i / 2] |= nib << (4 * (i % 2));
+            }
+            out.extend_from_slice(&alpha);
+            out.extend_from_slice(&encode_color_block_pca(&texels));
+        }
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
+mod encode_tests {
+    use super::*;
+
+    #[test]
+    fn full_encode_round_trips_colour_and_alpha() {
+        let mut t = vec![0u8; DXT3_HEADER_BYTES];
+        t[0] = FLG_DXT;
+        t[OFF_FOURCC..OFF_FOURCC + 4].copy_from_slice(DXT3_FOURCC);
+        let (w, h) = (8u32, 4u32);
+        let mut rgba = Vec::new();
+        for i in 0..w * h {
+            let a = if i % 2 == 0 { 255 } else { 0 };
+            rgba.extend_from_slice(&[200, 120, 60, a]);
+        }
+        let body = encode_dxt3(&t, *b"tim     hdtest  ", w, h, &rgba).unwrap();
+        let dec = crate::texture::decode_texture(&body).unwrap();
+        assert_eq!((dec.width, dec.height), (w, h));
+        for (i, p) in dec.rgba.chunks(4).enumerate() {
+            for c in 0..3 {
+                assert!((p[c] as i32 - rgba[i * 4 + c] as i32).abs() <= 8, "texel {i} {p:?}");
+            }
+        }
+    }
+}
