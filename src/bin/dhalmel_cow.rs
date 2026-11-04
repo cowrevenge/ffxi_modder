@@ -46,6 +46,8 @@ const TEXTURE_NAME_AT: usize = 0x01;
 
 const WHITE: [f32; 3] = [242.0, 240.0, 234.0];
 const BLACK: [f32; 3] = [24.0, 22.0, 22.0];
+const PINK: [f32; 3] = [238.0, 150.0, 170.0];
+const CREAM: [f32; 3] = [226.0, 214.0, 180.0];
 /// Patch size: noise cycles per world unit, base and detail octave.
 const SPOT_FREQUENCY: f32 = 1.1;
 const DETAIL_WEIGHT: f32 = 0.3;
@@ -70,6 +72,7 @@ const HEAD_PROFILE: &[(f32, f32, f32, f32)] = &[
     (0.25, 0.88, 0.78, 0.12),
     (0.45, 0.78, 0.66, 0.05),
     (0.65, 0.62, 0.55, -0.10),
+    (MUZZLE_FROM, 0.62, 0.58, -0.15),
     (0.82, 0.62, 0.60, -0.20),
     (0.95, 0.55, 0.55, -0.24),
 ];
@@ -78,9 +81,14 @@ const HEAD_NOSE_T: f32 = 1.0;
 const HEAD_DROOP: f32 = 25.0;
 /// Skull starts this far behind the head joint (head half-extents), over the neck end.
 const HEAD_BACK: f32 = -0.15;
+/// The muzzle starts on this profile ring, so the pink edge is a clean ring.
 const MUZZLE_FROM: f32 = 0.74;
 const HEAD_SEGMENTS: usize = 10;
 const HEAD_SPOT_THRESHOLD: f32 = 0.58;
+/// Face patches use the body noise at this scale, so a patch spans several quads.
+const FACE_SPOT_SCALE: f32 = 0.6;
+/// Face quads within this many eye radii of the eye go black, so the white eyeball reads.
+const EYE_PATCH: f32 = 2.0;
 const HORN_T: f32 = 0.2;
 const HORN_THETA: f32 = 0.3 * PI;
 const HORN_OUT: f32 = 1.0;
@@ -99,7 +107,10 @@ const EAR_WIDTH: f32 = 0.18;
 const EAR_FLATTEN: f32 = 0.3;
 const EYE_T: f32 = 0.42;
 const EYE_THETA: f32 = 0.38 * PI;
-const EYE_RADIUS: f32 = 0.09;
+const EYE_RADIUS: f32 = 0.2;
+/// Pupil radius and how far its centre sits out from the eyeball centre, in eye radii.
+const PUPIL_RADIUS: f32 = 0.62;
+const PUPIL_OUT: f32 = 0.7;
 const TUBE_RINGS: usize = 6;
 const TUBE_SEGMENTS: usize = 8;
 const SPHERE_RINGS: usize = 6;
@@ -269,6 +280,7 @@ fn cowify(input: &[u8]) -> Result<Vec<u8>, String> {
     }
 
     let mut new_textures: HashMap<usize, Vec<u8>> = HashMap::new();
+    let (mut white_sum, mut white_n, mut black_sum, mut black_n) = ([0.0f32; 3], 0usize, [0.0f32; 3], 0usize);
     for c in all.iter().filter(|c| c.kind == ChunkKind::Img as u8) {
         let name: [u8; TEXTURE_NAME_BYTES] = c.data[TEXTURE_NAME_AT..TEXTURE_NAME_AT + TEXTURE_NAME_BYTES]
             .try_into()
@@ -278,7 +290,14 @@ fn cowify(input: &[u8]) -> Result<Vec<u8>, String> {
             continue;
         };
         let decoded = texture::decode_texture(c.data).map_err(|e| e.to_string())?;
-        let painted = paint(&decoded.rgba, decoded.width as usize, decoded.height as usize, tris, &world);
+        let (painted, black) = paint(&decoded.rgba, decoded.width as usize, decoded.height as usize, tris, &world);
+        for (i, b) in black.iter().enumerate() {
+            let Some(b) = b else { continue };
+            let px = [painted[i * 4] as f32, painted[i * 4 + 1] as f32, painted[i * 4 + 2] as f32];
+            let (sum, n) = if *b { (&mut black_sum, &mut black_n) } else { (&mut white_sum, &mut white_n) };
+            *sum = add(*sum, px);
+            *n += 1;
+        }
         let body = texture_write::recolor_dxt3(c.data, &painted).map_err(|e| e.to_string())?;
         println!(
             "texture {:?} {}x{}: painted from {} triangles",
@@ -289,6 +308,21 @@ fn cowify(input: &[u8]) -> Result<Vec<u8>, String> {
         );
         new_textures.insert(c.offset, body);
     }
+
+    // The head atlas matches the body's painted tones, baked shading included,
+    // so the solid-colour parts light the same as the textured body.
+    if white_n == 0 || black_n == 0 {
+        return Err("painted body has no white or no black texels to tone the head from".into());
+    }
+    let tone = Tone {
+        white: scale(white_sum, 1.0 / white_n as f32),
+        black: scale(black_sum, 1.0 / black_n as f32),
+    };
+    println!(
+        "tone: body white {:?}, body black {:?}",
+        tone.white.map(|v| v as u8),
+        tone.black.map(|v| v as u8)
+    );
 
     // ---- Stage 2: cow head, horns, ears, eyes, udder ----
     let short_pose = bind_pose(&check)?;
@@ -429,26 +463,6 @@ fn cowify(input: &[u8]) -> Result<Vec<u8>, String> {
         let c = head_at(head_back + HEAD_NOSE_T * length, HEAD_PROFILE[HEAD_PROFILE.len() - 1].3);
         [c[0], c[1], mid_z]
     };
-    let muzzle_from = head_back + MUZZLE_FROM * length;
-    let mut head_part = loft(&sections, 0.0, PI, HEAD_SEGMENTS, true, Some(nose_tip));
-    head_part.joint = head_joint;
-    head_part.color = head_part
-        .tris
-        .iter()
-        .map(|t| {
-            let c = centroid3(&head_part.pos, t);
-            let local_x = dot(sub(c, hp.t), fwd);
-            if local_x >= muzzle_from {
-                Quad::Pink
-            } else if hide(c) > HEAD_SPOT_THRESHOLD {
-                Quad::Black
-            } else {
-                Quad::White
-            }
-        })
-        .collect();
-    parts.push(head_part);
-
     // Horns, ears and eyes sit on the stored side; the mirror makes the pair.
     let on_skull = |t: f32, theta: f32| -> (V3, V3) {
         let i = HEAD_PROFILE.partition_point(|s| s.0 <= t).clamp(1, HEAD_PROFILE.len() - 1);
@@ -467,6 +481,55 @@ fn cowify(input: &[u8]) -> Result<Vec<u8>, String> {
         );
         (p, normalize(dir))
     };
+    let (eye_at, eye_out) = on_skull(EYE_T, EYE_THETA);
+    let eye_r = EYE_RADIUS * head_half;
+
+    // Colour by quad, not by triangle: the muzzle edge is the ring at
+    // MUZZLE_FROM, face patches are the body noise sampled at the quad centre
+    // (coarser, so a patch spans quads), the eye sits in a black patch.
+    let mut head_part = loft(&sections, 0.0, PI, HEAD_SEGMENTS, true, Some(nose_tip));
+    head_part.joint = head_joint;
+    let ring_len = HEAD_SEGMENTS + 1;
+    let ring_count = HEAD_PROFILE.len();
+    let cap_center = ring_count * ring_len;
+    let tip_index = cap_center + 1;
+    let spot = |c: V3| -> Quad {
+        let d = sub(c, eye_at);
+        if dot(d, d).sqrt() < EYE_PATCH * eye_r {
+            Quad::Black
+        } else if hide(scale(c, FACE_SPOT_SCALE)) > HEAD_SPOT_THRESHOLD {
+            Quad::Black
+        } else {
+            Quad::White
+        }
+    };
+    head_part.color = head_part
+        .tris
+        .iter()
+        .map(|t| {
+            if t.contains(&tip_index) {
+                return Quad::Pink;
+            }
+            if t.contains(&cap_center) {
+                return spot(head_part.pos[cap_center]);
+            }
+            let ring = t.iter().map(|&i| i / ring_len).min().expect("3 corners");
+            let seg = t.iter().map(|&i| i % ring_len).min().expect("3 corners");
+            if HEAD_PROFILE[ring].0 >= MUZZLE_FROM {
+                return Quad::Pink;
+            }
+            let quad = [
+                ring * ring_len + seg,
+                ring * ring_len + seg + 1,
+                (ring + 1) * ring_len + seg,
+                (ring + 1) * ring_len + seg + 1,
+            ];
+            let c = quad.iter().fold([0.0; 3], |acc, &i| add(acc, head_part.pos[i]));
+            spot(scale(c, 0.25))
+        })
+        .collect();
+    parts.push(head_part);
+
     let (horn_base, _) = on_skull(HORN_T, HORN_THETA);
     let horn_dir = normalize(add(add(scale(side, HORN_OUT), scale(up, HORN_UP)), scale(fwd, HORN_FWD)));
     let mut horn = tube(
@@ -498,11 +561,15 @@ fn cowify(input: &[u8]) -> Result<Vec<u8>, String> {
     ear.color = vec![Quad::Black; ear.tris.len()];
     parts.push(ear);
 
-    let (eye_at, eye_out) = on_skull(EYE_T, EYE_THETA);
-    let mut eye = sphere(add(eye_at, scale(eye_out, -0.3 * EYE_RADIUS * head_half)), EYE_RADIUS * head_half, up, side);
+    let eye_c = add(eye_at, scale(eye_out, -0.3 * eye_r));
+    let mut eye = sphere(eye_c, eye_r, up, side);
     eye.joint = head_joint;
-    eye.color = vec![Quad::Black; eye.tris.len()];
+    eye.color = vec![Quad::White; eye.tris.len()];
     parts.push(eye);
+    let mut pupil = sphere(add(eye_c, scale(eye_out, PUPIL_OUT * eye_r)), PUPIL_RADIUS * eye_r, up, side);
+    pupil.joint = head_joint;
+    pupil.color = vec![Quad::Black; pupil.tris.len()];
+    parts.push(pupil);
 
     // Udder: hangs from the hips (the branching joint that carries the hind
     // legs), just ahead of the hind legs, top tucked into the belly.
@@ -614,7 +681,7 @@ fn cowify(input: &[u8]) -> Result<Vec<u8>, String> {
         for x in 0..ATLAS_SIZE as usize {
             let q = Quad::at(x / half, y / half);
             let o = (y * ATLAS_SIZE as usize + x) * 4;
-            atlas_rgba[o..o + 3].copy_from_slice(&q.rgb());
+            atlas_rgba[o..o + 3].copy_from_slice(&q.rgb(&tone));
         }
     }
     let atlas = texture_write::recolor_dxt3(&atlas_solid, &atlas_rgba).map_err(|e| e.to_string())?;
@@ -790,14 +857,31 @@ impl Quad {
         let (x, y) = self.cell();
         [(x + 0.5) / 2.0, (y + 0.5) / 2.0]
     }
-    fn rgb(self) -> [u8; 3] {
+    fn rgb(self, tone: &Tone) -> [u8; 3] {
+        let scaled = |c: [f32; 3]| scale(c, tone.level()).map(|v| v.clamp(0.0, 255.0) as u8);
         match self {
-            Quad::White => [242, 240, 234],
-            Quad::Black => [24, 22, 22],
-            Quad::Pink => [238, 150, 170],
-            Quad::Cream => [226, 214, 180],
+            Quad::White => tone.white.map(|v| v as u8),
+            Quad::Black => tone.black.map(|v| v as u8),
+            Quad::Pink => scaled(PINK),
+            Quad::Cream => scaled(CREAM),
         }
     }
+}
+
+/// The painted body's mean white and black, so solid parts match it.
+struct Tone {
+    white: V3,
+    black: V3,
+}
+
+impl Tone {
+    fn level(&self) -> f32 {
+        luma(self.white) / luma(WHITE)
+    }
+}
+
+fn luma(c: V3) -> f32 {
+    0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2]
 }
 
 struct Part {
@@ -1002,7 +1086,7 @@ fn normalize(v: V3) -> V3 {
 /// The texture repainted: white or black by 3D noise at each texel's bind
 /// position, scaled by the original brightness. Alpha is left as decoded; the
 /// encoder keeps the original alpha blocks anyway.
-fn paint(rgba: &[u8], w: usize, h: usize, tris: &[[(usize, [f32; 2]); 3]], world: &[V3]) -> Vec<u8> {
+fn paint(rgba: &[u8], w: usize, h: usize, tris: &[[(usize, [f32; 2]); 3]], world: &[V3]) -> (Vec<u8>, Vec<Option<bool>>) {
     let mut black: Vec<Option<bool>> = vec![None; w * h];
     for t in tris {
         let uv = t.map(|(_, uv)| [uv[0].rem_euclid(1.0) * w as f32, uv[1].rem_euclid(1.0) * h as f32]);
@@ -1056,7 +1140,7 @@ fn paint(rgba: &[u8], w: usize, h: usize, tris: &[[(usize, [f32; 2]); 3]], world
             out[i * 4 + c] = (base[c] * shade).clamp(0.0, 255.0) as u8;
         }
     }
-    out
+    (out, black)
 }
 
 fn hash(x: i32, y: i32, z: i32) -> f32 {
