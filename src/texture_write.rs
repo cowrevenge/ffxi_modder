@@ -121,3 +121,78 @@ mod tests {
         );
     }
 }
+
+const DXT_COLOR_BYTES: usize = 8;
+const INDEX_BITS: u32 = 2;
+
+fn expand565(c: u16) -> [f32; 3] {
+    let r = ((c >> 11) & 0x1F) as f32 * 255.0 / 31.0;
+    let g = ((c >> 5) & 0x3F) as f32 * 255.0 / 63.0;
+    let b = (c & 0x1F) as f32 * 255.0 / 31.0;
+    [r, g, b]
+}
+
+fn luma(p: &[u8]) -> f32 {
+    0.299 * p[0] as f32 + 0.587 * p[1] as f32 + 0.114 * p[2] as f32
+}
+
+/// One DXT color block (4-color mode) for 16 RGBA texels: endpoints are the
+/// brightest and darkest texel, each texel takes the nearest palette entry.
+pub fn encode_color_block(texels: &[[u8; 4]; 16]) -> [u8; DXT_COLOR_BYTES] {
+    let hi = texels.iter().max_by(|a, b| luma(*a).total_cmp(&luma(*b))).expect("16 texels");
+    let lo = texels.iter().min_by(|a, b| luma(*a).total_cmp(&luma(*b))).expect("16 texels");
+    let (mut c0, mut c1) = (rgb565([hi[0], hi[1], hi[2]]), rgb565([lo[0], lo[1], lo[2]]));
+    if c0 < c1 {
+        std::mem::swap(&mut c0, &mut c1);
+    }
+    let (e0, e1) = (expand565(c0), expand565(c1));
+    let mix = |a: f32, b: f32, w: f32| a * w + b * (1.0 - w);
+    let palette: [[f32; 3]; 4] = [
+        e0,
+        e1,
+        [0, 1, 2].map(|i| mix(e0[i], e1[i], 2.0 / 3.0)),
+        [0, 1, 2].map(|i| mix(e0[i], e1[i], 1.0 / 3.0)),
+    ];
+    let mut indices = 0u32;
+    if c0 != c1 {
+        for (i, t) in texels.iter().enumerate() {
+            let best = (0..4)
+                .min_by(|&a, &b| {
+                    let d = |k: usize| (0..3).map(|c| (palette[k][c] - t[c] as f32).powi(2)).sum::<f32>();
+                    d(a).total_cmp(&d(b))
+                })
+                .expect("palette has entries");
+            indices |= (best as u32) << (INDEX_BITS * i as u32);
+        }
+    }
+    let mut out = [0u8; DXT_COLOR_BYTES];
+    out[..2].copy_from_slice(&c0.to_le_bytes());
+    out[2..4].copy_from_slice(&c1.to_le_bytes());
+    out[4..].copy_from_slice(&indices.to_le_bytes());
+    out
+}
+
+/// A DXT3 body with new colors from `rgba` and the alpha blocks of `source`
+/// (a DXT3 body of the same size) kept byte for byte.
+pub fn recolor_dxt3(source: &[u8], rgba: &[u8]) -> Result<Vec<u8>, TextureWriteError> {
+    if source.len() < DXT3_HEADER_BYTES || source[0] != FLG_DXT || &source[OFF_FOURCC..OFF_FOURCC + 4] != DXT3_FOURCC {
+        return Err(TextureWriteError::NotDxt3Template);
+    }
+    let rd = |o: usize| u32::from_le_bytes(source[o..o + 4].try_into().expect("4 bytes"));
+    let (width, height) = (rd(OFF_WIDTH), rd(OFF_HEIGHT));
+    let (bw, bh) = ((width / DXT_BLOCK_TEXELS) as usize, (height / DXT_BLOCK_TEXELS) as usize);
+    let mut out = source.to_vec();
+    for by in 0..bh {
+        for bx in 0..bw {
+            let mut texels = [[0u8; 4]; 16];
+            for (i, t) in texels.iter_mut().enumerate() {
+                let (x, y) = (bx * 4 + i % 4, by * 4 + i / 4);
+                let o = (y * width as usize + x) * 4;
+                t.copy_from_slice(&rgba[o..o + 4]);
+            }
+            let block = DXT3_HEADER_BYTES + (by * bw + bx) * DXT3_BLOCK_BYTES;
+            out[block + DXT3_ALPHA_BYTES..block + DXT3_BLOCK_BYTES].copy_from_slice(&encode_color_block(&texels));
+        }
+    }
+    Ok(out)
+}

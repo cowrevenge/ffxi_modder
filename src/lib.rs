@@ -6,6 +6,8 @@ pub mod chunk;
 pub mod datid;
 pub mod kind;
 pub mod skel;
+pub mod skel_anim;
+pub mod skel_anim_write;
 pub mod skel_mesh;
 pub mod skel_mesh_write;
 pub mod texture;
