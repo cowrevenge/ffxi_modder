@@ -19,5 +19,11 @@ python3 tools/paint/runpaint.py paint_body out/ ROM/28/33.DAT
 cargo run --release --bin retexture -- ROM/28/33.DAT out/33.DAT hm_b61_3=out/hm_b61_3.rgba:512x1024
 ```
 
+Preview and layout helpers are in `preview/`: `texgrid.py` (gridded texture with cut-outs
+and mirror seams), `mirror.py` (finds mirror seams), `view.py` and `raster.py` (renders the
+gear on the skeleton, alpha-tested like the game).
+
+The whole process and its pitfalls: [`docs/texture-painting.md`](../../docs/texture-painting.md).
+
 Needs numpy, scipy and Pillow. These scripts made the Bastok Pride, Bounding Boots HD
 and Battle Gloves HD mods in `ffxi_mod_files`.

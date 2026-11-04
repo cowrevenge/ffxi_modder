@@ -69,7 +69,9 @@ before trusting a mod built from it.
 kuluu-ffxi's `ffxi-dat` crate (GPL-3.0-or-later), so **this repo is GPL-3.0-or-later too**
 and carries the readers' attribution.
 
-**Tools** — `main.rs` is the neck swap; `bin/dhalmel_cow.rs` is the cow.
+**Tools** — `main.rs` is the neck swap; `bin/dhalmel_cow.rs` is the cow; `bin/retexture.rs`
+swaps a DAT's textures for new pixels at any size; [`tools/paint`](tools/paint) paints new
+gear textures (see below).
 
 ## How the Dhalmel swap works
 
@@ -164,6 +166,14 @@ The Dhalmel is `ROM\5\15.DAT`, arrived at without guessing:
 
 Step 3 depends on **your** VTABLE/FTABLE, so re-resolve it per install — the same file id
 can land in a different folder on another client.
+
+## Painting new gear textures
+
+The Centurion set, Bastok Pride, Bounding Boots HD and Battle Gloves HD mods were painted
+new with [`tools/paint`](tools/paint) and built with `retexture`.
+
+**How it was done, step by step, with every pitfall:
+[`docs/texture-painting.md`](docs/texture-painting.md).**
 
 ## Status
 
