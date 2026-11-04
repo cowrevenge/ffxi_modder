@@ -8,7 +8,8 @@ leather surround (mirrored across y=127), and a dark cuff at the bottom.
 import sys, os
 import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from paint import Canvas, PAL, DARK_STEEL, CLOTH, LEATHER, mix, rounded_rect
+from paint import Canvas, PAL, DARK_STEEL, CLOTH, LEATHER, mix, rounded_rect, use_cool_leather, CHARCOAL
+use_cool_leather()
 import tex
 
 SLATE = [np.array([0x2c, 0x33, 0x5c], float), np.array([0x45, 0x4f, 0x88], float), np.array([0x63, 0x6f, 0xad], float)]

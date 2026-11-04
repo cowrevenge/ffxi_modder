@@ -42,7 +42,7 @@ def paint(alpha):
         c.rivet(x, y, 1.2)
 
     # sole and heel area on the left
-    c.shade(c.rect(-2, 22, 16, 34.6), SOLE, 22, 34.6, light=0.15, shadow=0.2, ink=False, mat=LEATHER)
+    c.shade(c.rect(-2, 22, 16, 34.6), DARK, 22, 34.6, light=0.15, shadow=0.2, ink=False, mat=LEATHER)   # instep
     c.shade(c.rect(-2, 53, 36, 66), SOLE, 53, 66, light=0.15, shadow=0.2, ink=False, mat=LEATHER)
     heel = c.poly_mask([(-2, 34.6), (9, 34.6), (12, 38), (16, 43.8), (22, 44.4), (30, 45.8), (34, 49.5), (35.5, 53.4), (-2, 53.4)])
     c.cast(heel, 0.3, 0.8, 0.5)

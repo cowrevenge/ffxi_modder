@@ -7,7 +7,8 @@ pattern; lames are held by riveted leather straps laid over them.
 import sys, os
 import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from paint import Canvas, PAL, DARK_STEEL, CLOTH, rounded_rect
+from paint import Canvas, PAL, DARK_STEEL, CLOTH, rounded_rect, use_cool_leather, CHARCOAL
+use_cool_leather()
 import tex
 
 BRASS = [np.array(v, float) for v in ((0x6b, 0x4a, 0x12), (0xc8, 0x96, 0x2e), (0xf4, 0xd2, 0x7a))]

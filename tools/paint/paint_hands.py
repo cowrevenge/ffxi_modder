@@ -2,10 +2,11 @@
 import sys, os
 import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from paint import Canvas, PAL, DARK_STEEL, LEATHER, mix
+from paint import Canvas, PAL, DARK_STEEL, LEATHER, mix, use_cool_leather, CHARCOAL
+use_cool_leather()
 
-DARKL = [PAL['leather'][0] * 0.45, PAL['leather'][0] * 0.75, PAL['leather'][0] * 1.05]
-PALM = [DARKL[0] * 0.7, DARKL[0], DARKL[1]]
+DARKL = [PAL['cloth'][0] * 0.75, PAL['cloth'][0] * 1.15, PAL['cloth'][1] * 1.05]   # glove: dark indigo leather
+PALM = [DARKL[0] * 0.75, DARKL[0], DARKL[1]]
 
 def paint(alpha):
     c = Canvas(64, 64, DARKL[1], base_mat=LEATHER)

@@ -2,17 +2,18 @@
 import sys, os
 import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from paint import Canvas, PAL, DARK_STEEL, LEATHER, CLOTH, mix, rounded_rect
+from paint import Canvas, PAL, DARK_STEEL, LEATHER, CLOTH, mix, rounded_rect, use_cool_leather, CHARCOAL
+use_cool_leather()
 
-PAD = [PAL['cloth'][0] * 0.6, PAL['cloth'][0] * 0.88, PAL['cloth'][1] * 0.72]
-FOOT = [PAL['leather'][0] * 0.4, PAL['leather'][0] * 0.7, PAL['leather'][0] * 1.0]
-CALF = [np.array(v, float) for v in ((0x4a, 0x27, 0x16), (0x7c, 0x46, 0x26), (0xab, 0x6c, 0x3e))]
+PAD = PAL['cloth']                                  # same indigo as the trousers
+FOOT = PAL['cloth']                                 # shoe: trouser indigo too
+CALF = PAL['leather']
 
-def panel(c, x0, y0, x1, y1, r=1.2, tones=PAD, mat=CLOTH):
+def panel(c, x0, y0, x1, y1, r=1.2, tones=PAD, mat=CLOTH, quilt=True):
     """dark padded panel: quilted with a lit upper edge, sitting under the straps."""
     m = c.poly_mask(rounded_rect(x0, y0, x1, y1, r))
     c.shade(m, tones, y0, y1, light=0.12, shadow=0.18, ink=False, mat=mat)
-    for y in np.arange(y0 + 4.5, y1 - 1, 5):
+    for y in (np.arange(y0 + 4.5, y1 - 1, 5) if quilt else ()):
         c.paint(m & c.rect(x0, y, x1, y + 0.45), tones[0], mat)
         c.paint(m & c.rect(x0, y + 0.45, x1, y + 0.8), tones[2], mat)
     c.outline(m, width=0.35)
@@ -22,25 +23,30 @@ def paint(alpha):
     am = c.alpha(alpha)
     c.shade(c.rect(-2, -2, 130, 66), PAL['leather'], -2, 66, light=0.05, shadow=0.05, ink=False, mat=LEATHER)
     # calf: plain creased brown leather at the back
-    calf = c.rect(83, 23.6, 130, 66)
-    c.shade(calf, CALF, 23.6, 66, light=0.12, shadow=0.15, ink=False, mat=LEATHER)
+    calf = c.rect(84.4, 23.2, 130, 66)
+    c.shade(calf, CALF, 23.2, 66, light=0.12, shadow=0.15, ink=False, mat=LEATHER)
     for x in (92, 103, 116):
         c.paint(c.poly_mask([(x - 0.3, 26), (x + 0.3, 26), (x + 1.3, 62), (x + 0.7, 62)]), CALF[0], LEATHER)
-    # padded panels between the straps
-    for x0, x1 in ((9, 16), (33, 48), (52, 60), (66, 80), (89, 110), (113, 119)):
-        panel(c, x0, -2, x1, 16.6)
-    panel(c, 8.6, 25, 24, 66, r=2.2, tones=FOOT, mat=LEATHER)      # the foot: dark leather
-    for x0, x1 in ((31, 48), (53, 61), (67, 80)):
-        panel(c, x0, 25, x1, 66)
+    # padded panels between the straps (strap positions and widths as on the original)
+    panel(c, 7.2, -2, 25, 17.4, quilt=False)                    # shoe upper
+    for x0, x1 in ((33, 49.5), (52.6, 63.6), (66.6, 82), (90, 119)):
+        panel(c, x0, -2, x1, 17.4)
+    panel(c, 7.2, 23.2, 25, 66, r=2.2, quilt=False)             # shoe
+    c.paint(c.rect(19.4, 10.4, 22.6, 13.6), PAL['leather'][0] * 0.7, LEATHER)   # underside of the instep (one small triangle samples here)
+    heel = c.rect(17.6, 38, 25, 66)                             # heel and sole block: leather, as on the original
+    c.shade(heel, PAL['leather'], 38, 66, light=0.12, shadow=0.15, ink=False, mat=LEATHER)
+    c.outline(heel, width=0.35); c.stitch(18.6, 39, 18.6, 65)
+    for x0, x1 in ((31, 49.5), (52.6, 63.6), (66.6, 82)):
+        panel(c, x0, 23.2, x1, 66)
     # vertical straps (laid over the panel edges)
-    for x0, x1, y0, y1 in ((-2, 8.8, -2, 66), (16, 24, -2, 17), (30, 33, -2, 17), (48, 52, -2, 66), (60, 66, -2, 17),
-                           (61, 67, 23.6, 66), (80, 89, -2, 17), (80, 83.4, 23.6, 66), (110, 113, -2, 17), (119, 130, -2, 17), (24, 31, 23.6, 66)):
+    for x0, x1, y0, y1 in ((-2, 7.2, -2, 66), (25, 33, -2, 17.4), (25, 31, 23.2, 66), (49.5, 52.6, -2, 66),
+                           (63.6, 66.6, -2, 66), (82, 90, -2, 17.4), (82, 84.4, 23.2, 66), (119, 130, -2, 17.4)):
         c.strap(x0, y0, x1, y1, stitch=(x1 - x0) > 4, cast=True)
     # broad strap round the top of the shin, steel buckle and a rivet
-    top = c.rect(-2, 16.4, 130, 23.6)
+    top = c.rect(-2, 17.4, 130, 23.2)
     c.cast(top, 0, 0.9, 0.5)
-    c.shade(top, PAL['leather'], 16.4, 23.6, light=0.22, shadow=0.22, ink=False, mat=LEATHER)
-    c.stitch(-1, 17.5, 129, 17.5); c.stitch(-1, 22.5, 129, 22.5); c.outline(top, width=0.35)
+    c.shade(top, PAL['leather'], 17.4, 23.2, light=0.22, shadow=0.22, ink=False, mat=LEATHER)
+    c.stitch(-1, 18.4, 129, 18.4); c.stitch(-1, 22.2, 129, 22.2); c.outline(top, width=0.35)
     fr = c.rect(97, 10.4, 106.4, 20.6); c.cast(fr, 0.3, 0.8, 0.5); c.metal(fr, 10.4, 20.6, 97, 106.4, glint=False)
     slot = c.rect(98.8, 12.4, 104.6, 18.6); c.paint(slot, PAL['leather'][0], LEATHER); c.outline(slot, width=0.3)
     c.paint(c.rect(101.3, 12.4, 102.1, 18.6), PAL['steel'][1])

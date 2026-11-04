@@ -32,6 +32,15 @@ PAL = {
     'spec': hexc('ffffff'),
 }
 DARK_STEEL = [PAL['steel'][0] * 0.7, PAL['steel'][0] * 1.1, PAL['steel'][0] * 1.5]
+# cooler, less saturated leather (the HD set's browns) for the Bastok Pride set
+COOL_LEATHER = [hexc('3e281b'), hexc('6e472e'), hexc('9c6d48')]
+COOL_STITCH = hexc('c9ad84')
+CHARCOAL = [hexc('121418'), hexc('25282e'), hexc('444850')]
+
+def use_cool_leather():
+    PAL['leather'][:] = COOL_LEATHER
+    PAL['stitch'][:] = COOL_STITCH
+
 INK_W = 0.42     # texels
 STITCH_W = 0.22
 

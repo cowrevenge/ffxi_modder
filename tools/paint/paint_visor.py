@@ -2,7 +2,8 @@
 import sys, os
 import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from paint import Canvas, PAL, DARK_STEEL, LEATHER, mix
+from paint import Canvas, PAL, DARK_STEEL, LEATHER, mix, use_cool_leather, CHARCOAL
+use_cool_leather()
 
 DARKL = [PAL['leather'][0] * 0.45, PAL['leather'][0] * 0.75, PAL['leather'][0] * 1.05]
 
