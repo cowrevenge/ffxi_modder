@@ -25,6 +25,7 @@ use ffxi_modder::kind::ChunkKind;
 use ffxi_modder::skel::{self, standard_position, Skeleton};
 use ffxi_modder::skel_anim;
 use ffxi_modder::skel_anim_write;
+use ffxi_modder::skel_write::SkelEditor;
 use ffxi_modder::skel_mesh_write::{
     pack_joint_ref, Instruction, SingleVertex, SkelMeshImage, TexturedCorner, MAX_TRIS_PER_DRAW,
     TEXTURE_NAME_BYTES,
@@ -35,15 +36,6 @@ use ffxi_modder::texture_write;
 /// Neck bone length kept, as a fraction of the Dhalmel's.
 const NECK_SCALE: f32 = 0.3;
 
-const JOINT_RECORDS_AT: usize = 0x04;
-const JOINT_RECORD_BYTES: usize = 30;
-const JOINT_TRANSLATION_AT: usize = 18;
-const REFERENCE_COUNT_BYTES: usize = 4;
-const REFERENCE_RECORD_BYTES: usize = 26;
-const REFERENCE_OFFSET_AT: usize = 14;
-const BOUNDING_BOX_BYTES: usize = 24;
-/// Full-body boxes (the third is the ground footprint): their top follows the model.
-const FULL_BODY_BOXES: usize = 2;
 const Y: usize = 1;
 /// A bone shorter than this (squared) is a coincident joint, not a bone.
 const ZERO_BONE: f32 = 1e-6;
@@ -116,10 +108,13 @@ const EAR_WIDTH: f32 = 0.18;
 const EAR_FLATTEN: f32 = 0.3;
 const EYE_T: f32 = 0.42;
 const EYE_THETA: f32 = 0.38 * PI;
-const EYE_RADIUS: f32 = 0.2;
+const EYE_RADIUS: f32 = 0.16;
+/// Eyeball centre sits this many eye radii inside the skull surface, so only a cap shows.
+const EYE_SINK: f32 = 0.6;
 /// Pupil radius and how far its centre sits out from the eyeball centre, in eye radii.
-const PUPIL_RADIUS: f32 = 0.62;
-const PUPIL_OUT: f32 = 0.7;
+const PUPIL_RADIUS: f32 = 0.5;
+/// Pupil centre out from the eyeball centre: just under the cap's height, so it sits on it.
+const PUPIL_OUT: f32 = 0.18;
 const TUBE_RINGS: usize = 6;
 const TUBE_SEGMENTS: usize = 8;
 const SPHERE_RINGS: usize = 6;
@@ -221,13 +216,11 @@ fn cowify(input: &[u8]) -> Result<Vec<u8>, String> {
     let shortened: Vec<usize> = (0..skeleton.joints.len())
         .filter(|&j| skeleton.joints[j].parent.is_some_and(|p| neck.contains(&p)))
         .collect();
-    let mut new_bone = bone.data.to_vec();
+    let mut bone_ed = SkelEditor::new(bone.data);
     for &j in &shortened {
-        let at = JOINT_RECORDS_AT + j * JOINT_RECORD_BYTES + JOINT_TRANSLATION_AT;
-        for (axis, v) in skeleton.joints[j].translation.iter().enumerate() {
-            let o = at + axis * 4;
-            new_bone[o..o + 4].copy_from_slice(&(v * NECK_SCALE).to_le_bytes());
-        }
+        bone_ed
+            .set_joint_translation(j, skeleton.joints[j].translation.map(|v| v * NECK_SCALE))
+            .map_err(|e| e.to_string())?;
     }
     // Bind-pose world position of every stored mesh vertex.
     let meshes: Vec<&Chunk> = all.iter().filter(|c| c.kind == ChunkKind::VertexOs2 as u8).collect();
@@ -339,10 +332,7 @@ fn cowify(input: &[u8]) -> Result<Vec<u8>, String> {
         let parent = skeleton.joints[shoulders].parent.ok_or("shoulders have no parent")?;
         let local_drop = mat_t_vec(&pose[parent].r, [0.0, level_drop, 0.0]);
         let t = add(skeleton.joints[shoulders].translation, local_drop);
-        let at = JOINT_RECORDS_AT + shoulders * JOINT_RECORD_BYTES + JOINT_TRANSLATION_AT;
-        for axis in 0..3 {
-            new_bone[at + axis * 4..at + axis * 4 + 4].copy_from_slice(&t[axis].to_le_bytes());
-        }
+        bone_ed.set_joint_translation(shoulders, t).map_err(|e| e.to_string())?;
     }
     // Leg bones below the root scale along their length; each leg joint's
     // vertices scale along that joint's bone axis so the segments stay joined.
@@ -350,10 +340,9 @@ fn cowify(input: &[u8]) -> Result<Vec<u8>, String> {
     for chain in &leg_chains {
         for (k, &j) in chain.iter().enumerate() {
             if k > 0 {
-                let at = JOINT_RECORDS_AT + j * JOINT_RECORD_BYTES + JOINT_TRANSLATION_AT;
-                for (axis, v) in skeleton.joints[j].translation.iter().enumerate() {
-                    new_bone[at + axis * 4..at + axis * 4 + 4].copy_from_slice(&(v * leg_factor).to_le_bytes());
-                }
+                bone_ed
+                    .set_joint_translation(j, skeleton.joints[j].translation.map(|v| v * leg_factor))
+                    .map_err(|e| e.to_string())?;
             }
             if let Some(&next) = chain[k + 1..].iter().find(|&&c| {
                 let d = sub(pose[c].t, pose[j].t);
@@ -385,7 +374,7 @@ fn cowify(input: &[u8]) -> Result<Vec<u8>, String> {
             d.normal[1] = normalize(along(j1, d.normal[1], 1.0 / leg_factor));
         }
     }
-    let check = skel::parse(DatId::from_name(&bone.name), &new_bone);
+    let check = bone_ed.current();
     for (j, (a, b)) in skeleton.joints.iter().zip(&check.joints).enumerate() {
         if b.rotation != a.rotation || b.parent != a.parent {
             return Err(format!("skeleton edit read back wrong at joint {j}"));
@@ -687,12 +676,12 @@ fn cowify(input: &[u8]) -> Result<Vec<u8>, String> {
     ear.color = vec![Quad::Black; ear.tris.len()];
     parts.push(ear);
 
-    let eye_c = add(eye_at, scale(eye_out, -0.3 * eye_r));
+    let eye_c = add(eye_at, scale(eye_out, -EYE_SINK * eye_r));
     let mut eye = sphere(eye_c, eye_r, up, side);
     eye.joint = head_joint;
     eye.color = vec![Quad::White; eye.tris.len()];
     parts.push(eye);
-    let mut pupil = sphere(add(eye_c, scale(eye_out, PUPIL_OUT * eye_r)), PUPIL_RADIUS * eye_r, up, side);
+    let mut pupil = sphere(add(eye_at, scale(eye_out, -PUPIL_OUT * eye_r)), PUPIL_RADIUS * eye_r, up, side);
     pupil.joint = head_joint;
     pupil.color = vec![Quad::Black; pupil.tris.len()];
     parts.push(pupil);
@@ -801,33 +790,12 @@ fn cowify(input: &[u8]) -> Result<Vec<u8>, String> {
         .chain(parts.iter().flat_map(|p| p.pos.iter().map(|q| q[Y])))
         .fold(f32::MAX, f32::min);
     let original_top = original_world.iter().map(|p| p[Y]).fold(f32::MAX, f32::min);
-    let refs_base = JOINT_RECORDS_AT + skeleton.joints.len() * JOINT_RECORD_BYTES;
-    let nameplate = skeleton
-        .reference_at(standard_position::ABOVE_HEAD)
-        .ok_or("skeleton has no nameplate reference")?;
-    if nameplate.index != 0 {
-        return Err(format!("nameplate reference hangs off joint {}, not the root", nameplate.index));
-    }
-    let nameplate_y = model_top + (nameplate.position_offset[Y] - original_top);
-    let at = refs_base + REFERENCE_COUNT_BYTES + standard_position::ABOVE_HEAD * REFERENCE_RECORD_BYTES + REFERENCE_OFFSET_AT + Y * 4;
-    new_bone[at..at + 4].copy_from_slice(&nameplate_y.to_le_bytes());
-    let boxes_base = refs_base + REFERENCE_COUNT_BYTES + skeleton.references.len() * REFERENCE_RECORD_BYTES;
-    for (i, bb) in skeleton.bounding_boxes.iter().enumerate().take(FULL_BODY_BOXES) {
-        let top = model_top + (bb.y_max - original_top);
-        let at = boxes_base + i * BOUNDING_BOX_BYTES;
-        new_bone[at..at + 4].copy_from_slice(&top.to_le_bytes());
-    }
-    let check = skel::parse(DatId::from_name(&bone.name), &new_bone);
-    let read_back = check.reference_at(standard_position::ABOVE_HEAD).map(|r| r.position_offset[Y]);
-    if read_back != Some(nameplate_y) || check.joints.len() != skeleton.joints.len() || check.references.len() != skeleton.references.len() {
-        return Err("nameplate edit read back wrong".into());
-    }
+    let fit = bone_ed.fit_height(original_top, model_top).map_err(|e| e.to_string())?;
     println!(
-        "height: model top {original_top:.3} -> {model_top:.3}; nameplate {:.3} -> {nameplate_y:.3}; boxes {:?} -> {:?}",
-        nameplate.position_offset[Y],
-        skeleton.bounding_boxes.iter().take(FULL_BODY_BOXES).map(|b| b.y_max).collect::<Vec<_>>(),
-        check.bounding_boxes.iter().take(FULL_BODY_BOXES).map(|b| b.y_max).collect::<Vec<_>>()
+        "height: model top {original_top:.3} -> {model_top:.3}; nameplate {:.3} -> {:.3}; boxes {:?}",
+        fit.nameplate.0, fit.nameplate.1, fit.boxes
     );
+    let new_bone = bone_ed.into_body();
 
     let new_mesh = image.encode().map_err(|e| e.to_string())?;
 

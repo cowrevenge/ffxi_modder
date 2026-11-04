@@ -10,6 +10,7 @@ pub mod skel_anim;
 pub mod skel_anim_write;
 pub mod skel_mesh;
 pub mod skel_mesh_write;
+pub mod skel_write;
 pub mod texture;
 pub mod texture_write;
 pub mod vos2;

@@ -52,6 +52,11 @@ before trusting a mod built from it.
 - `texture_write.rs` — emits a solid DXT3 texture chunk (header copied from a real retail
   texture so fields whose meaning is unknown keep retail values), and re-encodes a DXT3
   texture's colour blocks from new pixels while keeping its alpha blocks byte for byte.
+- `skel_write.rs` — in-place skeleton (`0x29`) edits: joint translations, reference offsets,
+  bounding-box tops, each re-parsed after writing. `SkelEditor::fit_height(original_top,
+  new_top)` is the one every mod that changes the model's height should call: it moves the
+  nameplate reference and the full-body boxes so they keep their original gap above the
+  model's highest point.
 - `skel_anim_write.rs` — replaces a joint's rotation keys in an animation (`0x2B`) chunk.
   New sequences are appended to the float pool and the channel offsets repointed, so shared
   pool data is never overwritten and everything not edited stays byte for byte.
