@@ -106,6 +106,14 @@ hardcoded — which is why the same writer drives the planned Galka body swap.
 
 `bin/dhalmel_cow.rs`, all from the model's own data:
 
+- **Level back.** The shoulder joint drops by the height difference between the rump
+  (hips-joint vertices) and the shoulder top, measured from the mesh (1.05 on the Dhalmel).
+  The front legs compress to match so the feet stay on the ground: leg bone translations
+  scale by the same factor (0.646) and every leg vertex scales along its joint's bone axis,
+  so the segments stay joined instead of overlapping.
+- **Height.** The nameplate reference (`ABOVE_HEAD`, a fixed offset from the root that
+  retail reads straight) and the two full-body bounding boxes keep their original gap above
+  the model's new highest point.
 - **Short neck.** The bind translations of the neck joints (31-36) are scaled to
   `NECK_SCALE` (0.3). Animation translation is *added* to bind translation, and every one of
   the Dhalmel's 16 clips keys zero translation on the neck, so all of them play on the short

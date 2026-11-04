@@ -38,6 +38,15 @@ const NECK_SCALE: f32 = 0.3;
 const JOINT_RECORDS_AT: usize = 0x04;
 const JOINT_RECORD_BYTES: usize = 30;
 const JOINT_TRANSLATION_AT: usize = 18;
+const REFERENCE_COUNT_BYTES: usize = 4;
+const REFERENCE_RECORD_BYTES: usize = 26;
+const REFERENCE_OFFSET_AT: usize = 14;
+const BOUNDING_BOX_BYTES: usize = 24;
+/// Full-body boxes (the third is the ground footprint): their top follows the model.
+const FULL_BODY_BOXES: usize = 2;
+const Y: usize = 1;
+/// A bone shorter than this (squared) is a coincident joint, not a bone.
+const ZERO_BONE: f32 = 1e-6;
 
 const OFF_FLAGS3: usize = 0x02;
 const FLAG3_USE_JOINT_ARRAY: u8 = 0x80;
@@ -220,14 +229,6 @@ fn cowify(input: &[u8]) -> Result<Vec<u8>, String> {
             new_bone[o..o + 4].copy_from_slice(&(v * NECK_SCALE).to_le_bytes());
         }
     }
-    let check = skel::parse(DatId::from_name(&bone.name), &new_bone);
-    for (j, (a, b)) in skeleton.joints.iter().zip(&check.joints).enumerate() {
-        let want = if shortened.contains(&j) { a.translation.map(|v| v * NECK_SCALE) } else { a.translation };
-        if b.translation != want || b.rotation != a.rotation || b.parent != a.parent {
-            return Err(format!("skeleton edit read back wrong at joint {j}"));
-        }
-    }
-
     // Bind-pose world position of every stored mesh vertex.
     let meshes: Vec<&Chunk> = all.iter().filter(|c| c.kind == ChunkKind::VertexOs2 as u8).collect();
     let [mesh_chunk] = meshes[..] else {
@@ -240,22 +241,162 @@ fn cowify(input: &[u8]) -> Result<Vec<u8>, String> {
         if use_joint_array { image.joint_array[slot] as usize } else { slot }
     };
     let singles = image.singles.len();
-    let world: Vec<V3> = (0..image.joint_refs.len())
-        .map(|v| {
-            let [r0, r1] = image.joint_refs[v];
-            if v < singles {
-                let j = joint_of(r0);
-                add(mat_vec(&pose[j].r, image.singles[v].position), pose[j].t)
-            } else {
-                let d = &image.doubles[v - singles];
-                let (j0, j1) = (joint_of(r0), joint_of(r1));
-                add(
-                    add(mat_vec(&pose[j0].r, d.position[0]), scale(pose[j0].t, d.weight[0])),
-                    add(mat_vec(&pose[j1].r, d.position[1]), scale(pose[j1].t, d.weight[1])),
-                )
+    let dominant_of = |image: &SkelMeshImage, v: usize| -> usize {
+        let [r0, r1] = image.joint_refs[v];
+        if v >= singles && image.doubles[v - singles].weight[1] > DOMINANT_WEIGHT {
+            joint_of(r1)
+        } else {
+            joint_of(r0)
+        }
+    };
+    let world_of = |image: &SkelMeshImage, pose: &[Pose]| -> Vec<V3> {
+        (0..image.joint_refs.len())
+            .map(|v| {
+                let [r0, r1] = image.joint_refs[v];
+                if v < singles {
+                    let j = joint_of(r0);
+                    add(mat_vec(&pose[j].r, image.singles[v].position), pose[j].t)
+                } else {
+                    let d = &image.doubles[v - singles];
+                    let (j0, j1) = (joint_of(r0), joint_of(r1));
+                    add(
+                        add(mat_vec(&pose[j0].r, d.position[0]), scale(pose[j0].t, d.weight[0])),
+                        add(mat_vec(&pose[j1].r, d.position[1]), scale(pose[j1].t, d.weight[1])),
+                    )
+                }
+            })
+            .collect()
+    };
+
+    // ---- Level the back: the shoulders come down to the rump's height and the
+    // front legs shorten to match, so the feet stay on the ground. ----
+    let shoulders = shoulders_of(&skeleton, &neck);
+    let mid_z = pose[shoulders].t[2];
+    let ancestors = |mut j: usize| -> HashSet<usize> {
+        let mut out = HashSet::new();
+        while let Some(p) = skeleton.joints[j].parent {
+            out.insert(p);
+            j = p;
+        }
+        out
+    };
+    let hips = (0..skeleton.joints.len())
+        .filter(|&j| j != shoulders && !neck.contains(&j) && j != head_joint)
+        .find(|&j| children.get(&j).copied().unwrap_or(0) >= HIP_MIN_CHILDREN)
+        .ok_or("no hip joint")?;
+    // Rump = the hips and the spine above them; the joints between hips and
+    // shoulders carry the mid-back ramp, which is what gets flattened.
+    let mut rear_joints = ancestors(hips);
+    rear_joints.insert(hips);
+    let first_neck = *neck.iter().min().ok_or("no neck joints")?;
+    let front_joints: HashSet<usize> = HashSet::from([shoulders, first_neck]);
+    let original_world = world_of(&image, &pose);
+    let top_of = |set: &HashSet<usize>| -> Option<f32> {
+        (0..original_world.len())
+            .filter(|&v| set.contains(&dominant_of(&image, v)))
+            .map(|v| original_world[v][Y])
+            .reduce(f32::min)
+    };
+    let rear_top = top_of(&rear_joints).ok_or("no rump vertices")?;
+    let front_top = top_of(&front_joints).ok_or("no shoulder vertices")?;
+    let level_drop = rear_top - front_top;
+    if level_drop <= 0.0 {
+        return Err(format!("shoulders ({front_top:.3}) are not above the rump ({rear_top:.3})"));
+    }
+
+    // Front legs: the off-midline children of the shoulders, followed down the
+    // single-child chain to the foot.
+    let mut leg_chains: Vec<Vec<usize>> = Vec::new();
+    for j in 0..skeleton.joints.len() {
+        if skeleton.joints[j].parent != Some(shoulders) || (pose[j].t[2] - mid_z).abs() <= LEG_OFF_MIDLINE {
+            continue;
+        }
+        let mut chain = vec![j];
+        let mut cur = j;
+        while let Some(c) = (0..skeleton.joints.len()).find(|&c| skeleton.joints[c].parent == Some(cur)) {
+            if children.get(&cur).copied().unwrap_or(0) != 1 {
+                return Err(format!("front leg joint {cur} branches"));
             }
-        })
-        .collect();
+            chain.push(c);
+            cur = c;
+        }
+        leg_chains.push(chain);
+    }
+    if leg_chains.is_empty() {
+        return Err("shoulders have no off-midline children (front legs)".into());
+    }
+    let leg_extent = {
+        let c = &leg_chains[0];
+        pose[*c.last().expect("chain")].t[Y] - pose[c[0]].t[Y]
+    };
+    if leg_extent <= level_drop {
+        return Err(format!("front legs ({leg_extent:.3}) are shorter than the drop ({level_drop:.3})"));
+    }
+    let leg_factor = (leg_extent - level_drop) / leg_extent;
+
+    // Shoulder joint: its translation in the parent's frame gains the world drop.
+    {
+        let parent = skeleton.joints[shoulders].parent.ok_or("shoulders have no parent")?;
+        let local_drop = mat_t_vec(&pose[parent].r, [0.0, level_drop, 0.0]);
+        let t = add(skeleton.joints[shoulders].translation, local_drop);
+        let at = JOINT_RECORDS_AT + shoulders * JOINT_RECORD_BYTES + JOINT_TRANSLATION_AT;
+        for axis in 0..3 {
+            new_bone[at + axis * 4..at + axis * 4 + 4].copy_from_slice(&t[axis].to_le_bytes());
+        }
+    }
+    // Leg bones below the root scale along their length; each leg joint's
+    // vertices scale along that joint's bone axis so the segments stay joined.
+    let mut leg_axis: HashMap<usize, V3> = HashMap::new();
+    for chain in &leg_chains {
+        for (k, &j) in chain.iter().enumerate() {
+            if k > 0 {
+                let at = JOINT_RECORDS_AT + j * JOINT_RECORD_BYTES + JOINT_TRANSLATION_AT;
+                for (axis, v) in skeleton.joints[j].translation.iter().enumerate() {
+                    new_bone[at + axis * 4..at + axis * 4 + 4].copy_from_slice(&(v * leg_factor).to_le_bytes());
+                }
+            }
+            if let Some(&next) = chain[k + 1..].iter().find(|&&c| {
+                let d = sub(pose[c].t, pose[j].t);
+                dot(d, d) > ZERO_BONE
+            }) {
+                leg_axis.insert(j, normalize(mat_t_vec(&pose[j].r, sub(pose[next].t, pose[j].t))));
+            }
+        }
+    }
+    let along = |j: usize, p: V3, k: f32| -> V3 {
+        match leg_axis.get(&j) {
+            Some(a) => add(p, scale(*a, (k - 1.0) * dot(p, *a))),
+            None => p,
+        }
+    };
+    for v in 0..image.joint_refs.len() {
+        let [r0, r1] = image.joint_refs[v];
+        if v < singles {
+            let j = joint_of(r0);
+            let sv = &mut image.singles[v];
+            sv.position = along(j, sv.position, leg_factor);
+            sv.normal = normalize(along(j, sv.normal, 1.0 / leg_factor));
+        } else {
+            let (j0, j1) = (joint_of(r0), joint_of(r1));
+            let d = &mut image.doubles[v - singles];
+            d.position[0] = along(j0, d.position[0], leg_factor);
+            d.position[1] = along(j1, d.position[1], leg_factor);
+            d.normal[0] = normalize(along(j0, d.normal[0], 1.0 / leg_factor));
+            d.normal[1] = normalize(along(j1, d.normal[1], 1.0 / leg_factor));
+        }
+    }
+    let check = skel::parse(DatId::from_name(&bone.name), &new_bone);
+    for (j, (a, b)) in skeleton.joints.iter().zip(&check.joints).enumerate() {
+        if b.rotation != a.rotation || b.parent != a.parent {
+            return Err(format!("skeleton edit read back wrong at joint {j}"));
+        }
+    }
+    let short_pose = bind_pose(&check)?;
+    let world = world_of(&image, &short_pose);
+    println!(
+        "level: rump top {rear_top:.3}, shoulder top {front_top:.3}, shoulders dropped {level_drop:.3}; front legs x{leg_factor:.3} ({} joints)",
+        leg_chains.iter().map(|c| c.len()).sum::<usize>()
+    );
 
     // Triangles with UVs, grouped by the texture they draw with.
     let mut by_texture: HashMap<[u8; TEXTURE_NAME_BYTES], Vec<[(usize, [f32; 2]); 3]>> = HashMap::new();
@@ -325,7 +466,6 @@ fn cowify(input: &[u8]) -> Result<Vec<u8>, String> {
     );
 
     // ---- Stage 2: cow head, horns, ears, eyes, udder ----
-    let short_pose = bind_pose(&check)?;
     let mut head: HashSet<usize> = HashSet::from([head_joint]);
     let mut grew = true;
     while grew {
@@ -336,16 +476,7 @@ fn cowify(input: &[u8]) -> Result<Vec<u8>, String> {
             }
         }
     }
-    let dominant: Vec<usize> = (0..image.joint_refs.len())
-        .map(|v| {
-            let [r0, r1] = image.joint_refs[v];
-            if v >= singles && image.doubles[v - singles].weight[1] > DOMINANT_WEIGHT {
-                joint_of(r1)
-            } else {
-                joint_of(r0)
-            }
-        })
-        .collect();
+    let dominant: Vec<usize> = (0..image.joint_refs.len()).map(|v| dominant_of(&image, v)).collect();
     let mut mirror_refs: HashMap<usize, HashMap<u16, usize>> = HashMap::new();
     for (v, refs) in image.joint_refs.iter().enumerate() {
         let used = if v < singles { &refs[..1] } else { &refs[..] };
@@ -421,10 +552,6 @@ fn cowify(input: &[u8]) -> Result<Vec<u8>, String> {
     }
     image.instructions = kept_ops;
 
-    let hips = (0..skeleton.joints.len())
-        .filter(|&j| j != shoulders_of(&skeleton, &neck) && !head.contains(&j))
-        .find(|&j| children.get(&j).copied().unwrap_or(0) >= HIP_MIN_CHILDREN)
-        .ok_or("no hip joint")?;
     let hip_kids: Vec<usize> = (0..skeleton.joints.len())
         .filter(|&j| skeleton.joints[j].parent == Some(hips))
         .collect();
@@ -433,14 +560,13 @@ fn cowify(input: &[u8]) -> Result<Vec<u8>, String> {
     // (y is down); side points toward the stored (non-mirror) half.
     let hp = short_pose[head_joint];
     let side_sign = -hp.r[2][2].signum();
-    let body_fwd = sub(short_pose[shoulders_of(&skeleton, &neck)].t, short_pose[hips].t);
+    let body_fwd = sub(short_pose[shoulders].t, short_pose[hips].t);
     let level = normalize([body_fwd[0], 0.0, 0.0]);
     let droop = HEAD_DROOP.to_radians();
     let fwd = normalize(add(scale(level, droop.cos()), [0.0, droop.sin(), 0.0]));
     let side = [0.0, 0.0, side_sign];
     let up = normalize(cross(side, fwd));
     let up = if up[1] < 0.0 { up } else { scale(up, -1.0) };
-    let mid_z = hp.t[2];
     let head_back = HEAD_BACK * head_half;
     let head_at = |x: f32, lift: f32| -> V3 {
         let p = add(add(hp.t, scale(fwd, x)), scale(up, lift * head_half));
@@ -582,7 +708,7 @@ fn cowify(input: &[u8]) -> Result<Vec<u8>, String> {
         return Err("hips have no off-midline children (hind legs)".into());
     }
     let leg_x = legs.iter().map(|t| t[0]).sum::<f32>() / legs.len() as f32;
-    let shoulder_x = short_pose[shoulders_of(&skeleton, &neck)].t[0];
+    let shoulder_x = short_pose[shoulders].t[0];
     let udder_x = leg_x + UDDER_AHEAD * (shoulder_x - leg_x);
     let belly_y = (0..world.len())
         .filter(|&v| (world[v][2] - mid_z).abs() < UDDER_PROBE && (world[v][0] - udder_x).abs() < UDDER_PROBE)
@@ -667,6 +793,42 @@ fn cowify(input: &[u8]) -> Result<Vec<u8>, String> {
     let tail_refs = image.joint_refs.split_off(singles);
     image.joint_refs.extend(new_refs);
     image.joint_refs.extend(tail_refs);
+    // Height: the nameplate reference and the full-body boxes keep their
+    // original gap above the model's highest point.
+    let model_top = world
+        .iter()
+        .map(|p| p[Y])
+        .chain(parts.iter().flat_map(|p| p.pos.iter().map(|q| q[Y])))
+        .fold(f32::MAX, f32::min);
+    let original_top = original_world.iter().map(|p| p[Y]).fold(f32::MAX, f32::min);
+    let refs_base = JOINT_RECORDS_AT + skeleton.joints.len() * JOINT_RECORD_BYTES;
+    let nameplate = skeleton
+        .reference_at(standard_position::ABOVE_HEAD)
+        .ok_or("skeleton has no nameplate reference")?;
+    if nameplate.index != 0 {
+        return Err(format!("nameplate reference hangs off joint {}, not the root", nameplate.index));
+    }
+    let nameplate_y = model_top + (nameplate.position_offset[Y] - original_top);
+    let at = refs_base + REFERENCE_COUNT_BYTES + standard_position::ABOVE_HEAD * REFERENCE_RECORD_BYTES + REFERENCE_OFFSET_AT + Y * 4;
+    new_bone[at..at + 4].copy_from_slice(&nameplate_y.to_le_bytes());
+    let boxes_base = refs_base + REFERENCE_COUNT_BYTES + skeleton.references.len() * REFERENCE_RECORD_BYTES;
+    for (i, bb) in skeleton.bounding_boxes.iter().enumerate().take(FULL_BODY_BOXES) {
+        let top = model_top + (bb.y_max - original_top);
+        let at = boxes_base + i * BOUNDING_BOX_BYTES;
+        new_bone[at..at + 4].copy_from_slice(&top.to_le_bytes());
+    }
+    let check = skel::parse(DatId::from_name(&bone.name), &new_bone);
+    let read_back = check.reference_at(standard_position::ABOVE_HEAD).map(|r| r.position_offset[Y]);
+    if read_back != Some(nameplate_y) || check.joints.len() != skeleton.joints.len() || check.references.len() != skeleton.references.len() {
+        return Err("nameplate edit read back wrong".into());
+    }
+    println!(
+        "height: model top {original_top:.3} -> {model_top:.3}; nameplate {:.3} -> {nameplate_y:.3}; boxes {:?} -> {:?}",
+        nameplate.position_offset[Y],
+        skeleton.bounding_boxes.iter().take(FULL_BODY_BOXES).map(|b| b.y_max).collect::<Vec<_>>(),
+        check.bounding_boxes.iter().take(FULL_BODY_BOXES).map(|b| b.y_max).collect::<Vec<_>>()
+    );
+
     let new_mesh = image.encode().map_err(|e| e.to_string())?;
 
     let template = all
