@@ -1,0 +1,9 @@
+[package]
+name = "ffxi_modder"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+description = "Lossless FFXI skinned-mesh DAT writer and the Dhalmel neck/head swap."
+
+[dependencies]
+thiserror = "2"
