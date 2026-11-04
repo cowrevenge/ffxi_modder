@@ -1,7 +1,7 @@
 # ffxi_modder
 
-Lossless read **and write** for FFXI skinned-mesh DATs, plus the Dhalmel neck/head swap
-built on it. Existing tooling in this space reads these files; nothing in
+Lossless read **and write** for FFXI skinned-mesh DATs, plus two Dhalmel mods built on it:
+the neck/head swap and the cow. Existing tooling in this space reads these files; nothing in
 [kuluu-ffxi's `ffxi-dat`](https://github.com/cowrevenge/kuluu-ffxi) could encode them, so
 the writer here is the point of the repo.
 
@@ -31,9 +31,13 @@ reproducible, so they are carried through verbatim.
 ## Usage
 
 ```
-cargo run --release -- <in.DAT> --check      prove the writer round trips this file
-cargo run --release -- <in.DAT> <out.DAT>    run the swap, write the modded DAT
+cargo run --release -- <in.DAT> --check                    prove the writer round trips this file
+cargo run --release -- <in.DAT> <out.DAT>                  neck mod: write the modded DAT
+cargo run --release --bin dhalmel_cow -- <in.DAT> <out.DAT>  cow mod: write the modded DAT
 ```
+
+Both mods take the retail or the NextHD Dhalmel; NextHD's has the same mesh, skeleton and
+animations, only higher-resolution textures.
 
 `--check` prints `round trip: byte-identical (<n> bytes)` or fails. Run it on any DAT
 before trusting a mod built from it.
@@ -45,15 +49,19 @@ before trusting a mod built from it.
 - `skel_mesh_write.rs` — the lossless model for a `0x2A` mesh chunk: single/double
   vertices, textured corners, draw instructions, joint packing, and the 4-byte trailing
   padding.
-- `texture_write.rs` — emits a solid DXT3 texture chunk. The header is copied from a real
-  retail texture so fields whose meaning is unknown keep plausible retail values.
+- `texture_write.rs` — emits a solid DXT3 texture chunk (header copied from a real retail
+  texture so fields whose meaning is unknown keep retail values), and re-encodes a DXT3
+  texture's colour blocks from new pixels while keeping its alpha blocks byte for byte.
+- `skel_anim_write.rs` — replaces a joint's rotation keys in an animation (`0x2B`) chunk.
+  New sequences are appended to the float pool and the channel offsets repointed, so shared
+  pool data is never overwritten and everything not edited stays byte for byte.
 - `chunk.rs` — chunk walker, plus `encode` / `reencode`.
 
-**Reader** — `chunk`, `skel`, `skel_mesh`, `texture`, `vos2`, `kind`, `datid`. Copied from
+**Reader** — `chunk`, `skel`, `skel_mesh`, `skel_anim`, `texture`, `vos2`, `kind`, `datid`. Copied from
 kuluu-ffxi's `ffxi-dat` crate (GPL-3.0-or-later), so **this repo is GPL-3.0-or-later too**
 and carries the readers' attribution.
 
-**Tool** — `main.rs` is the swap.
+**Tools** — `main.rs` is the neck swap; `bin/dhalmel_cow.rs` is the cow.
 
 ## How the Dhalmel swap works
 
@@ -94,6 +102,30 @@ All at the top of `main.rs`:
 Sizing is measured from the removed head, so it scales to the model rather than being
 hardcoded — which is why the same writer drives the planned Galka body swap.
 
+## How the Dhalmel cow works
+
+`bin/dhalmel_cow.rs`, all from the model's own data:
+
+- **Short neck.** The bind translations of the neck joints (31-36) are scaled to
+  `NECK_SCALE` (0.3). Animation translation is *added* to bind translation, and every one of
+  the Dhalmel's 16 clips keys zero translation on the neck, so all of them play on the short
+  neck. Neck and head geometry is stored joint-local, so it rides along.
+- **Holstein paint.** Both body textures are repainted white with black patches from 3D
+  noise over the bind-pose body, so a patch carries across UV seams. The original texel
+  brightness stays as shading; the original alpha blocks are kept byte for byte.
+- **Cow head.** The Dhalmel head (joint 36 + 9 children, 233 triangles) is replaced by a
+  lofted cow head with pink muzzle, horns, ears and eyes, 100% on the head joint. It faces
+  the body's forward direction (hips to shoulders) pitched down `HEAD_DROOP` degrees.
+- **Udder.** Pink, with teats, on the hips (the branching joint carrying the hind legs and
+  tail), just ahead of the hind legs with its top tucked into the belly.
+- **Attacks.** `at00` lift then smack, `at10` lift then side nudge, `atm1` double smack. Only
+  the neck and head rotation keys are replaced, peaking on each clip's original hit frame
+  (where the original head swung furthest); body and legs are untouched.
+
+Colours come from a new 16×16 DXT3 atlas chunk (`cowa`: white, black, pink, horn cream).
+Tuning knobs are the `const`s at the top of `bin/dhalmel_cow.rs` (`NECK_SCALE`,
+`SPOT_THRESHOLD`, `HEAD_PROFILE`, `HORN_*`, `UDDER_*`, `LIFT_DEG`, `SMACK_DEG`, `NUDGE_DEG`).
+
 ## Known caveat: rebuilds are not bit-identical
 
 Re-running the tool reproduces the model but not necessarily the same bytes — 1,708 bytes
@@ -119,9 +151,9 @@ can land in a different folder on another client.
 
 ## Status
 
-Working: skinned-mesh writer, solid-texture writer, Dhalmel swap.
-Not built yet: a `skel_anim` writer, which is what the PUP automaton "Overload" motion edit
-needs. `skel_anim.rs` is read-only today.
+Working: skinned-mesh writer, texture writers, animation rotation writer, Dhalmel neck
+swap, Dhalmel cow. The animation writer is the piece the PUP automaton "Overload" motion
+edit needs.
 
 ## Licence
 
