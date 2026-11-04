@@ -1,24 +1,16 @@
 # HD gear pass
 
-Smooth geometry plus 4x textures on one shared palette, for any gear DAT.
+4x textures on one shared palette, for any gear DAT. Geometry is left as authored.
 
 ```
 pip install torch --index-url https://download.pytorch.org/whl/cpu
 pip install numpy pillow
 curl -L -o tools/hd/realesr-general-x4v3.pth https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesr-general-x4v3.pth
 
-cargo run --release --bin smooth_gear -- <race skeleton.DAT> <in.DAT> smooth.DAT   # curves, 16x triangles
-python3 tools/hd/hd.py tex smooth.DAT                                               # prints a retexture spec line
-cargo run --release --bin retexture -- smooth.DAT out.DAT <spec from that line>
+python3 tools/hd/hd.py tex in.DAT                                                   # prints a retexture spec line
+cargo run --release --bin retexture -- in.DAT out.DAT <spec from that line>
 cargo run --release -- out.DAT --check                                              # must say byte-identical
 ```
-
-**Geometry (`smooth_gear`).** Two levels of Phong tessellation: every triangle splits into
-four per level and each new edge vertex sits on the curved surface the existing normals
-describe. Original vertices never move, so seams to the other gear pieces stay closed;
-edges whose end normals diverge past 45-70 degrees are split straight, so hard edges stay
-hard. New vertices take the averaged joint weights of their parents (strongest two), solved
-into joint space from the race skeleton's bind pose, so they animate with the mesh.
 
 **Textures (`hd.py`).**
 

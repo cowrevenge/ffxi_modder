@@ -36,8 +36,8 @@ cargo run --release -- <in.DAT> <out.DAT>                  neck mod: write the m
 cargo run --release --bin dhalmel_cow -- <in.DAT> <out.DAT>  cow mod: write the modded DAT
 ```
 
-Gear: [`tools/hd`](tools/hd) smooths any skinned mesh (`smooth_gear`) and swaps its
-textures for HD ones (`retexture`), on any gear piece, weapon or monster.
+Gear: [`tools/hd`](tools/hd) swaps any DAT's textures for HD ones (`retexture`), on any
+gear piece, weapon or monster.
 
 Both mods take the retail or the NextHD Dhalmel; NextHD's has the same mesh, skeleton and
 animations, only higher-resolution textures.
