@@ -99,7 +99,16 @@ def paint(alpha):
     # chest scales: six rows, offset brick pattern, each row lapping the one below.
     # mirror seams: front centre x=1, back centre x=127 (measured from the mesh).
     clipL = c.rect(-2, 28, 30, 98); clipR = c.rect(104, 28, 130, 98)
-    for row in reversed(range(6)):
+    # steel backing under the scales, so nothing but metal shows between the points
+    for cl, x0, x1 in ((clipL, -2, 30), (clipR, 104, 130)):
+        c.metal(cl, 28, 98, x0, x1, tones=DARK_STEEL, glint=False, ink=False)
+    # a seventh row tucked under the sixth fills the bottom edge
+    for cx in (10.5, 29.5): c.scale_plate(cx, 88, 9.5, 15, clip=clipL)
+    for cx in (119.5, 104.5): c.scale_plate(cx, 88, 7.5, 15, clip=clipR)
+    # dark steel backing behind the scales, so no cloth shows between the points
+    for clip in (clipL, clipR):
+        c.metal(clip, 28, 98, glint=False, ink=False, tones=DARK_STEEL)
+    for row in reversed(range(7)):                 # 7th row fills under the last points
         top = 30 + row * 10
         if row % 2 == 0:
             for cx in (1, 20): c.scale_plate(cx, top, 9.5, 15, clip=clipL)
