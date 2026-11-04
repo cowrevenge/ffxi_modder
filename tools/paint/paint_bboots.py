@@ -83,8 +83,9 @@ def paint(alpha):
     c.cast(back, 0.4, 0.9, 0.5)
     c.shade(back, TAN, -2, 37, light=0.15, shadow=0.15, ink=False, mat=LEATHER)
     c.outline(back, width=0.35)
-    frame = c.rect(110.2, -2, 123.4, 24.2)
-    c.metal(frame, -2, 24.2, 110.2, 123.4, glint=False, ink=False)
+    frame = c.rect(110.2, -2, 123.4, 24.2)                 # ladder frame: boot leather, not steel
+    c.cast(frame, 0.3, 0.8, 0.5)
+    c.shade(frame, SADDLE, -2, 24.2, light=0.18, shadow=0.18, ink=False, mat=LEATHER)
     for y0, y1 in ((5.2, 12.8), (15.2, 22.2)):
         slot = c.rect(112.2, y0, 121.4, y1)
         c.paint(slot, SOLE[1], LEATHER)

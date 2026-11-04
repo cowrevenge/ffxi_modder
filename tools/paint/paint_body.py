@@ -77,6 +77,12 @@ def paint(alpha):
         c.paint(ring & c.rect(x0, -1, x1, 9.6), col, 2)
     c.stitch(3.1, -1, 3.1, 9.6); c.stitch(7.4, -1, 7.4, 9.6)
 
+    # shoulder tops: the roll where it runs over the shoulders is leather, like the yoke
+    sh = c.poly_mask([(6, 9.6), (19, 9.6), (19, -2), (40, -2)] + [(x, A(x) + 0.5) for x in np.linspace(40, 6, 18)])
+    c.shade(sh, PAL['leather'], -2, 16, light=0.18, shadow=0.2, ink=False, mat=2)
+    c.stitch(20, 1.2, 39, 1.2)
+    c.outline(sh, width=0.35)
+
     # centre chest: arch of indigo cloth with two piped panels and a leather ladder
     # neckline dome: the chest panel's top follows the round neck opening
     ang = np.linspace(np.pi, 2 * np.pi, 40)
@@ -120,7 +126,7 @@ def paint(alpha):
     c.strap(30, 30, 37, 97, cast=True); c.strap(97, 30, 104, 97, cast=True)
     for y in (36, 56, 76): c.rivet(33.5, y); c.rivet(100.5, y)
     # leather yoke under the shoulder straps, either side of the neck opening
-    for x0, x1 in ((22, 46), (84, 106)):
+    for x0, x1 in ((22, 52), (84, 106)):
         yoke = c.rect(x0, 18, x1, 31) & ~archm
         c.shade(yoke, PAL['leather'], 18, 31, light=0.15, shadow=0.2, ink=False, mat=2)
         c.outline(yoke, width=0.35)
