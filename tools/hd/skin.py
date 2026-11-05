@@ -5,11 +5,15 @@ same colour, which carries seams, grain and stitching."""
 import numpy as np, cv2
 
 # race: (hue in LCh degrees, chroma / lightness, lightness centre, lightness half-width),
-# measured on bare legs (Hume F, Elvaan F, Mithra) and bare fingers (Galka). Races whose
-# gear shows no real stretch of skin are left out: their skin tone is the same as brown
-# leather, and a guess would hit leather.
+# measured on bare legs (Hume F, Elvaan F, Mithra) and bare fingers (Galka).
 REF = {'HumeF': (59.8, 0.46, 56, 9), 'ElvaanF': (60.3, 0.57, 43, 8),
-       'Mithra': (63.0, 0.73, 43, 8), 'Galka': (113.2, 0.18, 46, 14)}
+       'Mithra': (63.0, 0.73, 43, 8), 'Galka': (113.2, 0.18, 46, 14),
+       # measured on Legionnaire's bare thighs. Their tone is brown leather's, so a patch
+       # only counts as skin when it is a real stretch of it (see MIN_CORE)
+       'HumeM': (60.3, 0.54, 47, 8), 'ElvaanM': (59.9, 0.53, 38, 7),
+       'TaruM': (62.5, 0.67, 44, 6), 'TaruF': (62.5, 0.67, 44, 6)}
+# smallest smooth core (texels) that counts as skin; leather of skin tone comes in small patches
+MIN_CORE = {'HumeM': 300, 'ElvaanM': 300, 'TaruM': 200, 'TaruF': 200}
 
 def band(x, lo, hi, soft):
     return np.clip(np.minimum((x - lo) / soft + 1, (hi - x) / soft + 1), 0, 1)
@@ -30,7 +34,7 @@ def skin_weight(img, race, to_lch):
     # skin comes in patches: drop specks, then soften the edge
     m = cv2.morphologyEx((w > 0.5).astype(np.uint8), cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
     n, lab, st, _ = cv2.connectedComponentsWithStats(m)
-    keep = np.isin(lab, [i for i in range(1, n) if st[i, 4] >= 24])
+    keep = np.isin(lab, [i for i in range(1, n) if st[i, 4] >= MIN_CORE.get(race, 24)])
     # grow each confirmed patch over the whole skin-tone area it sits in: the smoothness
     # test fails within a few texels of a seam, and a thin band of skin is all seam
     tone = (colour > 0.5).astype(np.uint8)

@@ -38,8 +38,8 @@ brighter, dyed colours treated like leather), so a red set gets the same treatme
 Speckle is smoothed before the 4x upscale; original alpha values are kept.
 Bare skin painted into gear (thighs, midriffs, arms) keeps its colour: `skin.py` finds the
 race's own skin tone in smooth patches and takes it out of the grade (set `RACE`, e.g.
-`RACE=Mithra`; the batch sets it from the table). Hume F, Elvaan F, Mithra and Galka; the
-other races' skin is the same colour as brown leather and their gear shows little of it.
+`RACE=Mithra`; the batch sets it from the table). Every race: for Hume M, Elvaan M and Taru,
+whose skin is brown leather's colour, only a real stretch of bare skin counts.
 
 ```bash
 python3 tools/hd/allgear.py out/ in.DAT            # prints the retexture spec
