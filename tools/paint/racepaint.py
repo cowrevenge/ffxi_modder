@@ -49,6 +49,10 @@ for (name, img), (_, himg) in zip(tex.textures(race_dat), tex.textures(hume_dat)
         # the tail sheath sits here on Mithra (Hume M has abdomen plates here):
         # keep it plain, the original's leather in the set's colours, no armour
         M[108:158, 0:25] = True
+    if race in ('Mithra', 'Galka') and piece == 'body':
+        # rear waist beside the tail: Hume M's abdomen plate block lives here in the
+        # texture; on these races it is the back of the waist, painted from their own
+        M[98:146, 96:128] = True
     Hh, Ww = img.shape[:2]
     if (M.all() or himg.shape != img.shape) and not (os.environ.get('RACE') == 'TaruM' and piece in TARU):
         rgb = autostyle.restyle(img, STYLE.get(piece, 'pride'))
@@ -68,6 +72,13 @@ for (name, img), (_, himg) in zip(tex.textures(race_dat), tex.textures(hume_dat)
             auto = autostyle.restyle(img, STYLE.get(piece, 'pride'))
             m = cv2.GaussianBlur(cv2.resize(M.astype(np.float32), (Ww * 4, Hh * 4), interpolation=cv2.INTER_NEAREST), (0, 0), 1.5)[..., None]
             rgba[..., :3] = rgba[..., :3] * (1 - m) + auto * m
+        if race == 'Mithra' and piece == 'body':
+            # Mithra's tail (body texture x1-15, y133-157): its natural colour, HD only
+            import allgear
+            own = allgear.process(img, 7)[..., :3].astype(np.float64)
+            T = np.zeros((Hh, Ww), np.float32); T[132:158, 0:16] = 1
+            t = cv2.GaussianBlur(cv2.resize(T, (Ww * 4, Hh * 4), interpolation=cv2.INTER_NEAREST), (0, 0), 1.5)[..., None]
+            rgba[..., :3] = rgba[..., :3] * (1 - t) + own * t
         if race == 'Galka' and piece == 'legs':
             # the tail is a tail: its own original colours, only the HD pass, no restyle
             import allgear
