@@ -68,6 +68,13 @@ for (name, img), (_, himg) in zip(tex.textures(race_dat), tex.textures(hume_dat)
             auto = autostyle.restyle(img, STYLE.get(piece, 'pride'))
             m = cv2.GaussianBlur(cv2.resize(M.astype(np.float32), (Ww * 4, Hh * 4), interpolation=cv2.INTER_NEAREST), (0, 0), 1.5)[..., None]
             rgba[..., :3] = rgba[..., :3] * (1 - m) + auto * m
+        if race == 'Galka' and piece == 'legs':
+            # the tail is a tail: its own original colours, only the HD pass, no restyle
+            import allgear
+            own = allgear.process(img, 7)[..., :3].astype(np.float64)
+            T = np.zeros((Hh, Ww), np.float32); T[66:127, 97:128] = 1      # the bare tail tip only (the plates are armour)
+            t = cv2.GaussianBlur(cv2.resize(T, (Ww * 4, Hh * 4), interpolation=cv2.INTER_NEAREST), (0, 0), 1.5)[..., None]
+            rgba[..., :3] = rgba[..., :3] * (1 - t) + own * t
         rgba = rgba.astype(np.uint8)
     raw = os.path.join(out_dir, key + '.rgba'); rgba.tofile(raw)
     Image.fromarray(rgba[..., :3]).save(os.path.join(out_dir, key + '.png'))
