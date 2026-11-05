@@ -95,7 +95,7 @@ def render(tris, az_deg, size, center, half, flat=False):
             uu = (w0*uv[0][0]+w1*uv[1][0]+w2*uv[2][0]) % 1; vv = (w0*uv[0][1]+w1*uv[1][1]+w2*uv[2][1]) % 1
             px = tex[np.minimum((vv*h).astype(int), h-1), np.minimum((uu*w).astype(int), w-1)]
             col = px[..., :3] / 255
-            m &= px[..., 3] >= 128          # alpha test, as the game does
+            m &= px[..., 3] >= 64           # alpha test: FFXI solid starts near 0x77
         else:
             col = np.full(gx.shape+(3,), 0.6)
         z = w0*zs[0]+w1*zs[1]+w2*zs[2]

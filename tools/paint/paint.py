@@ -274,7 +274,7 @@ class Canvas:
         # bleeds a stray colour into the cut edges
         idx = ndimage.distance_transform_edt(~a, return_distances=False, return_indices=True)
         rgb = rgb[idx[0], idx[1]]
-        return np.dstack([np.clip(rgb, 0, 255), a * 255]).astype(np.uint8)
+        return np.dstack([np.clip(rgb, 0, 255), alpha_values(alpha_src, W, H)]).astype(np.uint8)
 
     def alpha(self, alpha_src):
         """the visible area at canvas resolution."""
@@ -285,9 +285,24 @@ class Canvas:
         a = self.alpha(alpha_src)
         self.outline(a)
 
+VISIBLE = 64     # alpha at or above this is drawn. FFXI stores "solid" as anything
+                 # from about 0x77 up (Taru gear uses 119/136), so 128 is too high.
+
 def alpha_mask(alpha_src, W, H):
-    a = Image.fromarray(alpha_src.astype(np.uint8)).resize((W, H), Image.BICUBIC)
-    return np.array(a) >= 128
+    """the visible shape at W x H: smooth curved edges, strictly in or out."""
+    vis = (alpha_src >= VISIBLE).astype(np.uint8) * 255
+    return np.array(Image.fromarray(vis).resize((W, H), Image.BICUBIC)) >= 128
+
+def alpha_values(alpha_src, W, H):
+    """output alpha: the original texel's own value inside the visible shape, 0 outside."""
+    vis = alpha_mask(alpha_src, W, H)
+    src = alpha_src.astype(np.float64)
+    keep = alpha_src >= VISIBLE
+    if keep.any() and (~keep).any():
+        idx = ndimage.distance_transform_edt(~keep, return_distances=False, return_indices=True)
+        src = src[idx[0], idx[1]]
+    up = np.array(Image.fromarray(src.astype(np.uint8)).resize((W, H), Image.NEAREST))
+    return np.where(vis, up, 0).astype(np.uint8)
 
 # -- surface textures (output resolution, values are luminance offsets) ----------
 def steel_texture(H, W, rng):
