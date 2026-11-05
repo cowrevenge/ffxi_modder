@@ -15,6 +15,19 @@ from chest_female import bake_tilt
 GAIN = 1.4          # brightness change per unit of tilt change
 SOFT = 2.5          # texels of smoothing on the baked change
 
+def back_cover(skel, dat, W, H, scale=4):
+    """texels that back-facing triangles also use. Gear often maps the front and the back
+    onto the same texels; shading those for the bust would print the bust on the back."""
+    import raster
+    m = np.zeros((H * scale, W * scale), np.uint8)
+    for P, N, uv, tx in raster.load(skel, [dat]):
+        if uv is None: continue
+        n = sum(N) / 3.0; n = n / (np.linalg.norm(n) + 1e-9)
+        if n[0] > -0.25: continue                       # model forward is +x
+        q = np.array([[u[0] * W * scale, u[1] * H * scale] for u in uv], np.float32)
+        cv2.fillConvexPoly(m, np.round(q * 4).astype(np.int32), 1, lineType=cv2.LINE_8, shift=2)
+    return m.astype(np.float32)
+
 def main(skel, stock, shaped, out_dir):
     os.makedirs(out_dir, exist_ok=True)
     specs = []
@@ -22,7 +35,8 @@ def main(skel, stock, shaped, out_dir):
         H, W = img.shape[:2]
         t0, _, bs = bake_tilt(skel, stock, W, H)
         t1, _, _ = bake_tilt(skel, shaped, W, H)
-        d = cv2.GaussianBlur((t1 - t0).astype(np.float32), (0, 0), SOFT * bs)
+        back = cv2.GaussianBlur(back_cover(skel, stock, W, H), (0, 0), 1.5 * bs)
+        d = cv2.GaussianBlur((t1 - t0).astype(np.float32) * (1 - np.clip(back * 2, 0, 1)), (0, 0), SOFT * bs)
         d = cv2.resize(d, (W, H), interpolation=cv2.INTER_AREA)
         f = np.clip(1.0 + GAIN * d, 0.55, 1.35)
         # change lightness only: scaling RGB would push saturation too (skin turns orange)

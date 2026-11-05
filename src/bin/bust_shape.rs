@@ -13,7 +13,8 @@
 //!   levels   subdivision levels inside the bust zone        (default 2)
 //!
 //! 1. Every vertex is posed on the race skeleton. The bust zone is an ellipse around
-//!    each apex (the mirror side follows: these meshes store one side).
+//!    each apex (the mirror side follows: these meshes store one side), on surface that
+//!    faces forward only: loose gear brings the back of the torso close to the bust.
 //! 2. Inside the zone, edges are split (red-green refinement: a triangle with three
 //!    split edges becomes four, with one or two it is fanned so no crack opens).
 //!    New vertices sit on the curved surface the normals describe (Phong) and are
@@ -205,8 +206,17 @@ fn posed(image: &SkelMeshImage, pose: &[Pose]) -> Result<Vec<Vert>, String> {
     Ok(verts)
 }
 
+/// 1 where the surface faces forward, fading to 0 as it turns to face backward. Loose
+/// gear puts the back of the torso within reach of the bust; it must never move.
+fn front_facing(n: V3) -> f32 {
+    ((n[0] + 0.45) / 0.3).clamp(0.0, 1.0)
+}
+
 /// 0..1 inside the bust zone around either apex (the mirror one included).
-fn zone(p: V3, apex: V3, s: &Shape) -> f32 {
+fn zone(p: V3, n: V3, apex: V3, s: &Shape) -> f32 {
+    if front_facing(n) <= 0.0 {
+        return 0.0;
+    }
     let mut best: f32 = 0.0;
     for side in [1.0f32, -1.0] {
         let a = [apex[0], apex[1], apex[2] * side];
@@ -225,7 +235,11 @@ fn zone(p: V3, apex: V3, s: &Shape) -> f32 {
 }
 
 /// The hand-tuned bust: forward bump at (y, z), 0 at the zone rim.
-fn bump(p: V3, apex: V3, s: &Shape) -> V3 {
+fn bump(p: V3, n: V3, apex: V3, s: &Shape) -> V3 {
+    let ff = front_facing(n);
+    if ff <= 0.0 {
+        return [0.0; 3];
+    }
     let mut best = [0.0f32; 3];
     let mut best_f = 0.0f32;
     for side in [1.0f32, -1.0] {
@@ -244,6 +258,7 @@ fn bump(p: V3, apex: V3, s: &Shape) -> V3 {
             // forward, plus a touch out to the side and down under the curve
             let out_side = (p[2] - a[2]).signum() * 0.08 * dz.abs().min(1.0);
             let under = if p[1] > a[1] { 0.12 } else { 0.0 };
+            let f = f * ff;
             best = [s.depth * f, s.depth * f * under, s.depth * f * out_side];
         }
     }
@@ -294,14 +309,14 @@ fn reshape(mut image: SkelMeshImage, pose: &[Pose], apex: V3, shape: &Shape) -> 
             Instruction::RenderProperties(_) | Instruction::Texture(_) => None,
         });
     }
-    if !verts.iter().any(|v| zone(v.p, apex, shape) > 0.0) {
+    if !verts.iter().any(|v| zone(v.p, v.n, apex, shape) > 0.0) {
         return image.encode().map_err(|e| e.to_string()); // nothing of the bust in this mesh
     }
 
     let original = verts.len();
     // local red-green refinement inside the zone
     for _ in 0..shape.levels {
-        let in_zone: Vec<bool> = verts.iter().map(|v| zone(v.p, apex, shape) > 0.0).collect();
+        let in_zone: Vec<bool> = verts.iter().map(|v| zone(v.p, v.n, apex, shape) > 0.0).collect();
         let mut mid: HashMap<(usize, usize), usize> = HashMap::new();
         let split = |a: usize, b: usize| in_zone[a] && in_zone[b];
         for op in ops.iter_mut().flatten() {
@@ -355,9 +370,9 @@ fn reshape(mut image: SkelMeshImage, pose: &[Pose], apex: V3, shape: &Shape) -> 
     }
 
     // the shape: move every zone vertex by the bump field (originals and new ones)
-    let moved: Vec<bool> = verts.iter().map(|v| zone(v.p, apex, shape) > 0.0).collect();
+    let moved: Vec<bool> = verts.iter().map(|v| zone(v.p, v.n, apex, shape) > 0.0).collect();
     for v in verts.iter_mut() {
-        let d = bump(v.p, apex, shape);
+        let d = bump(v.p, v.n, apex, shape);
         if v.p[2].abs() < 1e-4 {
             v.p = add(v.p, [d[0], d[1], 0.0]); // centreline stays on the mirror plane
         } else {
