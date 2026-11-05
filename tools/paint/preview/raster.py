@@ -3,19 +3,29 @@ from PIL import Image
 import render_gear as rg
 import os; sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')); import tex as T
 
+def is_occluded(display_type, occ):
+    """the game's slot occlusion (kuluu ffxi_actor_render is_occluded): a draw call whose
+    display type is covered by another worn piece's occlude type is not drawn."""
+    h = occ.__contains__
+    return {0: False,
+            1: h(2) or h(3) or h(4) or h(5) or h(6),
+            2: h(4) or h(5) or h(6), 3: h(4) or h(5) or h(6),
+            4: h(5), 5: h(0x12), 6: h(0x32), 7: h(0x22)}.get(display_type, False)
+
 def load(skel, parts):
     G = rg.skeleton(skel)
     out = []
-    for path in parts:
-        ch = rg.chunks(open(path, 'rb').read())
+    datas = [rg.chunks(open(p, 'rb').read()) for p in parts]
+    occ = {c[2][3] for ch in datas for c in ch if c[1] == 0x2a}
+    for ch in datas:
         tex = {c[2][1:17].decode('latin1'): T.decode(c[2]) for c in ch
                if c[1] == 0x20 and c[2][0] == 0xa1 and c[2][0x39:0x3d] == b'3TXD'}
         for c in ch:
             if c[1] == 0x2a:
-                out += tris_uv(c[2], G, tex)
+                out += tris_uv(c[2], G, tex, occ)
     return out
 
-def tris_uv(me, G, tex):
+def tris_uv(me, G, tex, occ=frozenset()):
     # same decode as render_gear.mesh_tris, but keep per-corner UVs and the texture
     u = lambda o, f: struct.unpack_from(f, me, o)
     f3 = me[2]; sym = me[4] == 1; uja = bool(f3 & 0x80); cloth = bool(f3 & 1)
@@ -42,11 +52,11 @@ def tris_uv(me, G, tex):
             m0 = np.array(n0) if m == 0 else rg.flip(n0, r0 >> 14); m1 = np.array(n1) if m == 0 else rg.flip(n1, r1 >> 14)
             W[m].append(G[j0][0]@q0+w0*G[j0][1]+G[j1][0]@q1+w1*G[j1][1])
             N[m].append(w0*(G[j0][0]@m0)+w1*(G[j1][0]@m1))
-    c = u(0x6, '<I')[0]*2; tn = ''; out = []
+    c = u(0x6, '<I')[0]*2; tn = ''; out = []; dtype = 0
     while True:
         op, = u(c, '<H'); c += 2
         if op == 0xffff: break
-        if op == 0x8010: c += 0x2c; continue
+        if op == 0x8010: dtype = me[c + 13]; c += 0x2c; continue
         if op == 0x8000: tn = me[c:c+16].decode('latin1'); c += 16; continue
         n, = u(c, '<H'); c += 2; T = []
         if op == 0x0054:
@@ -61,6 +71,7 @@ def tris_uv(me, G, tex):
             i3 = u(c, '<3H'); c += 10; idx = list(i3)
             for t in range(n-1): idx.append(u(c, '<H')[0]); c += 2
             T = [(idx[k:k+3], None) for k in range(n)]
+        if is_occluded(dtype, occ): continue
         for i3, uv in T:
             for m in (0, 1):
                 if W[m][i3[0]] is None: continue
