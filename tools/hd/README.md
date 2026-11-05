@@ -29,3 +29,23 @@ every other chunk byte for byte and re-reads what it wrote.
 
 Retail draws gear with back-face culling off, so outline tricks that rely on an inverted
 hull mesh do not work on FFXI gear; outlines have to be painted into the texture.
+
+## All-gear HD pass (`allgear.py`)
+
+Keeps every item's own colours. It applies the Centurion HD set's clean-up as *relative*
+moves per material (leather a little lighter and richer, grey cloth faintly cool, plate
+brighter, dyed colours treated like leather), so a red set gets the same treatment in red.
+Speckle is smoothed before the 4x upscale; original alpha values are kept.
+
+```bash
+python3 tools/hd/allgear.py out/ in.DAT            # prints the retexture spec
+python3 tools/hd/allgear_batch.py --ffxi "<FINAL FANTASY XI>" --table gear_table_paths.csv \
+    --out "<Pivot DATs>\AllGearHD" --retexture target/release/retexture.exe [--skip skip.txt]
+```
+
+`allgear_batch.py` resolves every DAT in the table, writes one Pivot overlay folder,
+uses all cores, is resumable and logs failures. `--skip` lists DAT ids a hand-made mod
+already covers.
+
+`eisen.py`: the same pass plus a polished finish on the steel (deeper engraving, polished
+highlight curve, cool silver). Used for Eisen/Kampf.
