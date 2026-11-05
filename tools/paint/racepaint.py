@@ -30,11 +30,16 @@ def mismatch(a, b):
 
 piece, race_dat, hume_dat, out_dir = sys.argv[1:5]
 os.makedirs(out_dir, exist_ok=True)
+TARU = {'feet': 'paint_taru_feet', 'bboots': 'paint_taru_bboots', 'legs': 'paint_taru_legs'}
+if os.environ.get('RACE') == 'TaruM' and piece in TARU:
+    MOD = dict(MOD, **{piece: TARU[piece]})
 mod = importlib.import_module(MOD[piece])
 specs = []
 for (name, img), (_, himg) in zip(tex.textures(race_dat), tex.textures(hume_dat)):
     key = name.split()[-1]
     M = mismatch(himg, img)
+    if os.environ.get('RACE') == 'TaruM' and piece in TARU:
+        M = np.zeros(img.shape[:2], bool)          # hand-painted for the Taru layout
     race = os.environ.get('RACE', '')
     if piece == 'body' and M.shape == (256, 128):
         # chest scale blocks: same columns on every race, only the row spacing shifts
@@ -45,7 +50,7 @@ for (name, img), (_, himg) in zip(tex.textures(race_dat), tex.textures(hume_dat)
         # keep it plain, the original's leather in the set's colours, no armour
         M[108:158, 0:25] = True
     Hh, Ww = img.shape[:2]
-    if M.all() or himg.shape != img.shape:
+    if (M.all() or himg.shape != img.shape) and not (os.environ.get('RACE') == 'TaruM' and piece in TARU):
         rgb = autostyle.restyle(img, STYLE.get(piece, 'pride'))
         from paint import alpha_mask, alpha_values
         a = alpha_mask(img[..., 3], Ww * 4, Hh * 4)
