@@ -20,3 +20,8 @@ Tuned values (Bastok Pride chest, the look picked as "+60%"):
 For painted sets, re-bake the texture shading from the new shape: run
 `tools/paint/racepaint.py body ...` with `BAKE_DAT=<shaped DAT>`, then `retexture` the
 shaped DAT.
+
+For gear with the auto HD texture (not hand-painted), `tools/paint/bustshade.py
+<skeleton> <stock.DAT> <shaped.DAT> <out_dir>` bakes how much each texel's surface now
+faces up or down compared with the stock mesh and lightens / darkens the texture by that
+change, then `retexture` the shaped DAT with the spec it prints.
