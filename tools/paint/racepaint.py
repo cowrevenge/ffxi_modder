@@ -8,7 +8,7 @@ import numpy as np, cv2
 from scipy import ndimage
 from PIL import Image
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'hd'))
+sys.path.insert(0, '/home/claude/work/allgear')
 import tex, autostyle
 
 MOD = {'body': 'paint_body', 'legs': 'paint_legs', 'hands': 'paint_hands', 'feet': 'paint_feet', 'visor': 'paint_visor',
@@ -65,7 +65,7 @@ for (name, img), (_, himg) in zip(tex.textures(race_dat), tex.textures(hume_dat)
         if piece == 'body' and race in ('HumeF', 'ElvaanF', 'Mithra'):
             import chest_female
             skel = os.environ['SKEL']
-            mod.CHEST = chest_female.make_chest(img, skel, race_dat)
+            mod.CHEST = chest_female.make_chest(img, skel, os.environ.get('BAKE_DAT', race_dat))
         rgba = mod.paint(img[..., 3]).astype(np.float64)
         if piece == 'body': mod.CHEST = None
         if M.any():
