@@ -21,7 +21,7 @@ def skin_weight(img, race, to_lch):
     L, C, h = (x.reshape(H, W) for x in to_lch(img[..., :3].reshape(-1, 3).astype(np.float64)))
     dh = np.abs((h - h0 + 180) % 360 - 180)
     r = C / np.maximum(L, 1)
-    colour = band(dh, -1, 7, 3) * band(r / r0, 0.8, 1.22, 0.08) * band(L, lc - lw, lc + lw, 4)
+    colour = band(dh, -1, 10, 3) * band(r / r0, 0.8, 1.22, 0.08) * band(L, lc - lw, lc + lw, 4)
     # smooth: little fine detail around the texel (skin is soft shading)
     fine = np.abs(cv2.Laplacian(cv2.GaussianBlur(L.astype(np.float32), (0, 0), 0.6), cv2.CV_32F, ksize=3))
     rough = cv2.GaussianBlur(fine, (0, 0), 1.5)
@@ -31,10 +31,11 @@ def skin_weight(img, race, to_lch):
     m = cv2.morphologyEx((w > 0.5).astype(np.uint8), cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
     n, lab, st, _ = cv2.connectedComponentsWithStats(m)
     keep = np.isin(lab, [i for i in range(1, n) if st[i, 4] >= 24])
-    # grow from the confirmed patches into neighbouring texels of the same tone: the
-    # smoothness test fails within a few texels of a seam, the skin there is still skin
-    tone = (colour > 0.5).astype(np.uint8); grown = keep.astype(np.uint8)
-    for _ in range(6):
-        grown = cv2.dilate(grown, np.ones((3, 3), np.uint8)) & tone
+    # grow each confirmed patch over the whole skin-tone area it sits in: the smoothness
+    # test fails within a few texels of a seam, and a thin band of skin is all seam
+    tone = (colour > 0.5).astype(np.uint8)
+    n2, lab2 = cv2.connectedComponents(tone)
+    hit = np.unique(lab2[keep & (tone > 0)]); hit = hit[hit > 0]
+    grown = np.isin(lab2, hit)
     w = np.maximum(keep * w, grown * colour)
     return cv2.GaussianBlur(w.astype(np.float32), (0, 0), 0.8).astype(np.float64) * (img[..., 3] > 32)

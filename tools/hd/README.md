@@ -51,5 +51,10 @@ python3 tools/hd/allgear_batch.py --ffxi "<FINAL FANTASY XI>" --table gear_table
 uses all cores, is resumable and logs failures. `--skip` lists DAT ids a hand-made mod
 already covers.
 
+`scale_front.py`: Scale Mail's front plate grids (chest and lower panel, on the mirror seam)
+redrawn after the pass: straight lines from the original's grid, stacked plates in the HD
+colours, and half a centre line at the seam so the mirror makes it whole.
+`python3 tools/hd/scale_front.py <original.DAT> <hd.DAT> out/` prints the retexture spec.
+
 `eisen.py`: the same pass plus a polished finish on the steel (deeper engraving, polished
 highlight curve, cool silver). Used for Eisen/Kampf.
