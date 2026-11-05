@@ -8,7 +8,7 @@ import numpy as np, cv2
 from scipy import ndimage
 from PIL import Image
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, '/home/claude/work/allgear')
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'hd'))
 import tex, autostyle
 
 MOD = {'body': 'paint_body', 'legs': 'paint_legs', 'hands': 'paint_hands', 'feet': 'paint_feet', 'visor': 'paint_visor',

@@ -11,7 +11,7 @@ import sys, os
 import numpy as np, cv2
 from scipy import ndimage
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, '/home/claude/work/ctr')
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'preview'))
 import tex
 from paint import SS, PAL, STEEL, mix
 
