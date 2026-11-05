@@ -53,7 +53,12 @@ for (name, img), (_, himg) in zip(tex.textures(race_dat), tex.textures(hume_dat)
             idx = ndimage.distance_transform_edt(~a, return_distances=False, return_indices=True); rgb = rgb[idx[0], idx[1]]
         rgba = np.dstack([rgb, alpha_values(img[..., 3], Ww * 4, Hh * 4)]).astype(np.uint8)
     else:
+        if piece == 'body' and race in ('HumeF', 'ElvaanF', 'Mithra'):
+            import chest_female
+            skel = os.environ['SKEL']
+            mod.CHEST = chest_female.make_chest(img, skel, race_dat)
         rgba = mod.paint(img[..., 3]).astype(np.float64)
+        if piece == 'body': mod.CHEST = None
         if M.any():
             auto = autostyle.restyle(img, STYLE.get(piece, 'pride'))
             m = cv2.GaussianBlur(cv2.resize(M.astype(np.float32), (Ww * 4, Hh * 4), interpolation=cv2.INTER_NEAREST), (0, 0), 1.5)[..., None]

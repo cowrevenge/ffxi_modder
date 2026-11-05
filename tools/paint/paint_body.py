@@ -48,6 +48,8 @@ def emblem(c, cx, cy, r=4.4):
         c.paint(c.ellipse_mask(cx + s_ * k * 0.8, cy - k * 0.5, k * 0.24, k * 0.24), ink)      # eyes
         c.paint(c.ellipse_mask(cx + s_ * k * 0.75, cy - k * 0.58, k * 0.08, k * 0.08), PAL['spec'])
 
+CHEST = None     # set by racepaint for races whose front chest is laid out differently
+
 def paint(alpha):
     c = Canvas(128, 256, PAL['cloth'][1], base_mat=CLOTH)
     cloth = PAL['cloth']
@@ -109,7 +111,8 @@ def paint(alpha):
     for cl, x0, x1 in ((clipL, -2, 30), (clipR, 104, 130)):
         c.metal(cl, 28, 98, x0, x1, tones=DARK_STEEL, glint=False, ink=False)
     # a seventh row tucked under the sixth fills the bottom edge
-    for cx in (10.5, 29.5): c.scale_plate(cx, 88, 9.5, 15, clip=clipL)
+    if CHEST is None:
+        for cx in (10.5, 29.5): c.scale_plate(cx, 88, 9.5, 15, clip=clipL)
     for cx in (119.5, 104.5): c.scale_plate(cx, 88, 7.5, 15, clip=clipR)
     # dark steel backing behind the scales, so no cloth shows between the points
     for clip in (clipL, clipR):
@@ -117,11 +120,15 @@ def paint(alpha):
     for row in reversed(range(7)):                 # 7th row fills under the last points
         top = 30 + row * 10
         if row % 2 == 0:
-            for cx in (1, 20): c.scale_plate(cx, top, 9.5, 15, clip=clipL)
+            if CHEST is None:
+                for cx in (1, 20): c.scale_plate(cx, top, 9.5, 15, clip=clipL)
             for cx in (127, 112): c.scale_plate(cx, top, 7.5, 15, clip=clipR)
         else:
-            for cx in (10.5, 29.5): c.scale_plate(cx, top, 9.5, 15, clip=clipL)
+            if CHEST is None:
+                for cx in (10.5, 29.5): c.scale_plate(cx, top, 9.5, 15, clip=clipL)
             for cx in (119.5, 104.5): c.scale_plate(cx, top, 7.5, 15, clip=clipR)
+    if CHEST is not None:
+        CHEST(c, clipL)                            # race-specific front chest (female bust)
     # side straps hold the scale columns (laid over them)
     c.strap(30, 30, 37, 97, cast=True); c.strap(97, 30, 104, 97, cast=True)
     for y in (36, 56, 76): c.rivet(33.5, y); c.rivet(100.5, y)
