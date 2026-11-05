@@ -9,7 +9,7 @@ import numpy as np
 from PIL import Image
 from scipy import ndimage
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import tex, esr
+import tex, esr, skin
 from hd import weights, hsv
 
 # Mod 3's grade, made relative so every item keeps its own colours. Measured on the
@@ -41,6 +41,10 @@ def classes(img):
     taken = np.clip(w['leather'] + w['cloth'] + w['plate'], 0, 1)
     coloured = np.clip((s - 0.3) / 0.1, 0, 1) * np.clip((v - 0.12) / 0.06, 0, 1) * (1 - taken)
     w['coloured'] = coloured
+    # bare skin keeps its own colour: take it out of every material class
+    sk = skin.skin_weight(img, os.environ.get('RACE', ''), to_lch)
+    if sk.any():
+        for k in w: w[k] = w[k] * (1 - sk)
     return w
 
 def target(kind, mean):
@@ -102,7 +106,8 @@ def process(img, seed):
     clean = img.copy()
     clean[..., :3] = cv2.bilateralFilter(img[..., :3].astype(np.float32), 0, DENOISE[0], DENOISE[1])
     graded, w = grade(clean)
-    up = esr.upscale4(push(graded))
+    sk = skin.skin_weight(clean, os.environ.get('RACE', ''), to_lch)[..., None]
+    up = esr.upscale4(push(graded) * (1 - sk) + graded * sk)     # skin skips the final push too
     hd = detail(up, w, seed)
     H, W = img.shape[:2]
     sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'paint')); from paint import alpha_mask, alpha_values

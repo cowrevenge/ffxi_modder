@@ -32,8 +32,9 @@ def rom_path(V, F, fid):
     return None
 
 def work(args):
-    src, dst, retexture = args
+    src, dst, retexture, race = args
     try:
+        os.environ['RACE'] = race        # skin tone the HD pass leaves alone (skin.py)
         import numpy as np
         import tex, allgear
         tmp = tempfile.mkdtemp(prefix='allgear_')
@@ -65,14 +66,15 @@ if __name__ == '__main__':
     a = ap.parse_args()
     V, F = load_tables(a.ffxi)
     skip = set(open(a.skip).read().split()) if a.skip else set()
-    ids = sorted({int(r['dat_id']) for r in csv.DictReader(open(a.table)) if r['dat_id'] and r['dat_id'] not in skip})
+    race_of = {int(r['dat_id']): r['race'] for r in csv.DictReader(open(a.table)) if r['dat_id'] and r['dat_id'] not in skip}
+    ids = sorted(race_of)
     jobs, missing = [], 0
     for fid in ids:
         rel = rom_path(V, F, fid)
         if not rel: missing += 1; continue
         src, dst = os.path.join(a.ffxi, rel), os.path.join(a.out, rel)
         if os.path.exists(dst) or not os.path.exists(src): continue
-        jobs.append((src, dst, a.retexture))
+        jobs.append((src, dst, a.retexture, race_of[fid]))
     if a.limit: jobs = jobs[:a.limit]
     print(f'{len(ids)} DATs in table, {missing} not in this install, {len(jobs)} to do, {a.workers} workers', flush=True)
     done = fail = 0

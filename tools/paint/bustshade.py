@@ -24,8 +24,11 @@ def main(skel, stock, shaped, out_dir):
         t1, _, _ = bake_tilt(skel, shaped, W, H)
         d = cv2.GaussianBlur((t1 - t0).astype(np.float32), (0, 0), SOFT * bs)
         d = cv2.resize(d, (W, H), interpolation=cv2.INTER_AREA)
-        f = np.clip(1.0 + GAIN * d, 0.55, 1.35)[..., None]
-        rgb = np.clip(img[..., :3] * f, 0, 255)
+        f = np.clip(1.0 + GAIN * d, 0.55, 1.35)
+        # change lightness only: scaling RGB would push saturation too (skin turns orange)
+        lab = cv2.cvtColor(np.clip(img[..., :3], 0, 255).astype(np.uint8), cv2.COLOR_RGB2LAB).astype(np.float32)
+        lab[..., 0] = np.clip(lab[..., 0] * f, 0, 255)
+        rgb = cv2.cvtColor(lab.astype(np.uint8), cv2.COLOR_LAB2RGB).astype(np.float32)
         rgba = np.dstack([rgb, img[..., 3]]).astype(np.uint8)
         key = name.split()[-1]
         raw = os.path.join(out_dir, key + '.rgba'); rgba.tofile(raw)
