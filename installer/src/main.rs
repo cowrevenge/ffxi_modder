@@ -294,6 +294,8 @@ struct App {
     pivot_inactive: Vec<String>,
     pivot_dirty: bool,
     pivot_msg: Option<(bool, String)>,
+    on: Vec<String>,           // overlays switched on in pivot.ini (re-read every 2 s)
+    on_read: Instant,
 }
 
 impl App {
@@ -312,7 +314,24 @@ impl App {
         // leftovers from a download that was interrupted (game folder was closed mid-way)
         if let Some(r) = &root { let _ = fs::remove_dir_all(dats_dir(r).join(".installall")); }
         App { items, root, root_note: note, browser: None, queue: VecDeque::new(), active: None, last: vec![None; n],
-              screen: Screen::Main, pivot: None, pivot_inactive: vec![], pivot_dirty: false, pivot_msg: None }
+              screen: Screen::Main, pivot: None, pivot_inactive: vec![], pivot_dirty: false, pivot_msg: None,
+              on: vec![], on_read: Instant::now() - std::time::Duration::from_secs(10) }
+    }
+
+    fn refresh_on(&mut self) {
+        self.on = self.root.as_ref().map(|r| PivotIni::load(&pivot_ini(r)).overlays).unwrap_or_default();
+        self.on_read = Instant::now();
+    }
+
+    fn is_on(&self, folder: &str) -> bool { self.on.iter().any(|o| o.eq_ignore_ascii_case(folder)) }
+
+    /// switch an overlay on or off in pivot.ini (on: put in its place, other Dhalmel goes off)
+    fn set_on(&mut self, folder: &str, on: bool) {
+        let Some(r) = &self.root else { return };
+        let mut ini = PivotIni::load(&pivot_ini(r));
+        if on { place_overlay(&mut ini.overlays, folder); } else { ini.overlays.retain(|o| !o.eq_ignore_ascii_case(folder)); }
+        let _ = ini.save();
+        self.refresh_on();
     }
 
     fn installed(&self, i: usize) -> bool {
@@ -338,6 +357,7 @@ impl App {
                         place_overlay(&mut ini.overlays, self.items[p.item].folder);
                         let _ = ini.save();
                         if self.pivot.is_some() { self.open_pivot(); }
+                        self.refresh_on();
                     }
                 }
                 self.last[p.item] = Some(p.phase.clone());
@@ -390,7 +410,8 @@ impl App {
 
         ui.add_space(8.0);
         let enabled = self.root.is_some();
-        let dhalmel_note = "Only one Dhalmel mod is active at a time; installing one switches the other off in Pivot.";
+        if self.on_read.elapsed().as_secs_f32() > 2.0 { self.refresh_on(); }
+        let dhalmel_note = "Cow and Shafty can both be downloaded, but only one can be enabled. Enabling one disables the other. Close the game before enabling or disabling.";
         egui::Frame::group(ui.style()).show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.label(RichText::new("Mods").strong());
@@ -411,9 +432,16 @@ impl App {
             state.show_header(ui, |ui| {
                 ui.label(RichText::new("AutoHD Gear").strong());
                 let n = RACES.filter(|&i| self.installed(i)).count();
-                ui.weak(format!("{n}/7 races installed  (Bastok Pride included)"));
+                ui.weak(format!("{n}/7 races downloaded  (Bastok Pride included)"));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.add_enabled(enabled, egui::Button::new("Download all races")).clicked() { for i in RACES { self.enqueue(i); } }
+                    if n > 0 {
+                        let on = self.is_on("AutoHD");
+                        if ui.add_enabled(enabled, egui::Button::new(if on { "Disable" } else { "Enable" }).min_size(egui::vec2(90.0, 0.0))).clicked() { self.set_on("AutoHD", !on); }
+                        if on { ui.colored_label(Color32::from_rgb(90, 200, 120), "enabled"); } else { ui.weak("disabled"); }
+                    }
+                    if n < 7 && ui.add_enabled(enabled, egui::Button::new("Download all races")).clicked() {
+                        for i in RACES { if !self.installed(i) { self.enqueue(i); } }
+                    }
                 });
             }).body(|ui| {
                 egui::Grid::new("races").num_columns(3).spacing([16.0, 6.0]).min_col_width(80.0).show(ui, |ui| {
@@ -455,14 +483,28 @@ impl App {
             } else if let Some(Phase::Failed(m)) = &self.last[i] {
                 ui.colored_label(Color32::from_rgb(235, 110, 90), m);
             } else if self.installed(i) {
-                ui.colored_label(Color32::from_rgb(90, 200, 120), "\u{2714} installed");
+                let shared = self.items[i].marker.is_some();   // AutoHD races: one folder, switched on in the header
+                if shared || self.is_on(self.items[i].folder) {
+                    ui.colored_label(Color32::from_rgb(90, 200, 120), if shared { "\u{2714} downloaded" } else { "\u{2714} downloaded, enabled" });
+                } else {
+                    ui.weak("\u{2714} downloaded, disabled");
+                }
             } else {
-                ui.weak("not installed");
+                ui.weak("not downloaded");
             }
         });
         let busy = self.queue.contains(&i) || self.active.as_ref().map(|a| a.lock().map(|p| p.item == i).unwrap_or(false)).unwrap_or(false);
-        let label = if matches!(self.last[i], Some(Phase::Failed(_))) { "Retry" } else if self.installed(i) { "Update" } else { "Download" };
-        if ui.add_enabled(enabled && !busy, egui::Button::new(label).min_size(egui::vec2(90.0, 0.0))).clicked() { self.enqueue(i); }
+        let size = egui::vec2(90.0, 0.0);
+        if matches!(self.last[i], Some(Phase::Failed(_))) || !self.installed(i) || busy {
+            let label = if matches!(self.last[i], Some(Phase::Failed(_))) { "Retry" } else { "Download" };
+            if ui.add_enabled(enabled && !busy, egui::Button::new(label).min_size(size)).clicked() { self.enqueue(i); }
+        } else if self.items[i].marker.is_none() {
+            let folder = self.items[i].folder;
+            let on = self.is_on(folder);
+            if ui.add_enabled(enabled, egui::Button::new(if on { "Disable" } else { "Enable" }).min_size(size)).clicked() { self.set_on(folder, !on); }
+        } else {
+            ui.label("");
+        }
     }
 
     // ------------------------------------------------ pivot screen
