@@ -20,7 +20,7 @@ C = np.array([np.mean(t[0], 0) for t in tris])
 top, bot = C[:, 1].min(), C[:, 1].max()           # FFXI y points down: top = min
 H_ = bot - top
 # front lobe: upper part of the jelly, in the +x (forward) sector
-lobe = (C[:, 1] < top + 0.36 * H_) & (C[:, 0] > 0.18) & (C[:, 0] > 1.4 * np.abs(C[:, 2]))
+lobe = (C[:, 1] < top + 0.46 * H_) & (C[:, 0] > 0.18) & (C[:, 0] > 1.4 * np.abs(C[:, 2]))
 print('front lobe triangles', lobe.sum(), 'of', len(tris))
 
 # texture
@@ -33,19 +33,19 @@ for t, f in zip(tris, lobe):
     if not f: continue
     q = np.array([[u[0] * W, u[1] * H] for u in t[2]], np.float32)
     m = np.zeros((H, W), np.uint8); cv2.fillConvexPoly(m, np.round(q * 4).astype(np.int32), 1, shift=2)
-    hgt = (top + 0.36 * H_ - np.mean([p[1] for p in t[0]])) / (0.36 * H_)   # 0 at base, 1 at tip
+    hgt = (top + 0.46 * H_ - np.mean([p[1] for p in t[0]])) / (0.46 * H_)   # 0 at base, 1 at tip
     height += m * hgt; cnt += m
-w = np.clip((np.where(cnt > 0, height / np.maximum(cnt, 1), 0) - 0.06) * 2.4, 0, 1)
+w = np.clip((np.where(cnt > 0, height / np.maximum(cnt, 1), 0) - 0.10) * 3.6, 0, 1)
 w = cv2.GaussianBlur(w, (0, 0), 1.5)
 # base colour: red already? then purple
 hsv = cv2.cvtColor(np.clip(rgb, 0, 255).astype(np.uint8)[None].reshape(H, W, 3), cv2.COLOR_RGB2HSV)
 hue = np.median(hsv[..., 0][hsv[..., 1] > 40]) if (hsv[..., 1] > 40).any() else 0
 reddish = (hue < 12 or hue > 165) and np.median(hsv[..., 1]) > 60
-dark, lit = (np.array([110, 20, 150]), np.array([235, 150, 255])) if reddish else (np.array([150, 18, 16]), np.array([255, 120, 90]))
+dark, lit = (np.array([165, 40, 220]), np.array([245, 190, 255])) if reddish else (np.array([215, 30, 25]), np.array([255, 170, 140]))
 print('base hue', hue, '-> marker', 'purple' if reddish else 'red')
 L = rgb @ np.array([0.299, 0.587, 0.114], np.float32)
 lo, hi = np.percentile(L, 5), np.percentile(L, 99)
-t = np.clip((L - lo) / max(hi - lo, 1), 0, 1) ** 0.8
+t = np.clip((L - lo) / max(hi - lo, 1), 0, 1) ** 0.6
 shade = dark[None, None] * (1 - t[..., None]) + lit[None, None] * t[..., None]
 marked = rgb * (1 - w[..., None]) + shade * w[..., None]
 new = np.zeros((H * 2, W, 4), np.uint8)
