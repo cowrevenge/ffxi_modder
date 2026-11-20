@@ -1,0 +1,22 @@
+[package]
+name = "install-all"
+version = "1.0.0"
+edition = "2021"
+description = "Install ALL! (HD + Cow + Jelly): downloader and Pivot overlay manager for cowrevenge/ffxi_mod_files"
+license = "GPL-3.0"
+
+[[bin]]
+name = "InstallALL"
+path = "src/main.rs"
+
+[dependencies]
+eframe = { version = "0.31", default-features = false, features = ["default_fonts", "glow", "x11", "wayland"] }
+ureq = { version = "2.10", default-features = false, features = ["tls", "native-certs"] }
+sevenz-rust = "0.6"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+
+[workspace]
