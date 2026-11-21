@@ -25,7 +25,8 @@ NF = np.array([np.mean(t[1], 0) for t in tris]); NF /= np.linalg.norm(NF, axis=1
 top, bot = C[:, 1].min(), C[:, 1].max(); H_ = bot - top       # FFXI y points down: top = min
 upper = C[:, 1] < top + 0.46 * H_
 SECTOR = 2.2                                                  # rough pick: x must beat SECTOR*|z|
-NECK = float(os.environ.get('JELLY_NECK', '80'))              # ring size: percentile of the rough pick
+NECK = float(os.environ.get('JELLY_NECK', '90'))              # ring size: percentile of the rough pick
+LIFT = float(os.environ.get('JELLY_LIFT', '0.03'))            # how far above the neck crease the hood stops
 
 # surface graph: vertices shared by triangles, edges weighted by length
 import heapq
@@ -58,7 +59,16 @@ def region(s):
     tip = vu[np.argmax(s * VP[vu, 0])]
     dist = geodesic(tip)
     ring = np.percentile(dist[TV[old]].max(1), NECK)
-    lobe = dist[TV].max(1) <= ring
+    # neck crease: down the centre line, the dip between the tentacle's bulge and the body
+    cl = VP[(np.abs(VP[:, 2]) < 0.04) & (s * VP[:, 0] > 0.3)]
+    bulge = cl[cl[:, 1] < top + 0.46 * H_]; by = bulge[np.argmax(s * bulge[:, 0]), 1]
+    below = cl[(cl[:, 1] > by) & (cl[:, 1] < by + 0.5)]
+    crease = below[np.argmin(s * below[:, 0]), 1]
+    cut = crease - LIFT                                   # hood stops just above the crease
+    inside = (dist <= ring) & (VP[:, 1] <= cut)           # per vertex
+    lobe = inside[TV].all(1)                              # wholly under the hood
+    touch = inside[TV].any(1)                             # the hood edge runs through these: painted per pixel
+    print(('front' if s > 0 else 'tail'), 'bulge y', round(by, 3), 'crease y', round(crease, 3))
     d = np.array([s, 0.0, 0.0]); up = np.array([0, -1.0, 0]); rt = np.cross(up, d)
     draw = lobe & (s * NF[:, 0] > 0)
     area = lambda P: 0.5 * abs(np.cross(P[1] - P[0], P[2] - P[0]) @ d)
@@ -69,10 +79,10 @@ def region(s):
     edge = [p for k in np.where(~draw)[0] for p in tris[k][0] if key(p) in inner]
     r_in = min(np.hypot((p - c) @ rt, (p - c) @ up) for p in edge)
     print(('front' if s > 0 else 'tail'), 'triangles', lobe.sum(), 'clipart', draw.sum(), 'r_in', round(r_in, 4))
-    return lobe, draw, (c, rt, up, r_in)
+    return touch, draw, (c, rt, up, r_in), (dist, ring, cut)
 
-front, front_draw, front_p = region(+1)
-tail, tail_draw, tail_p = region(-1)
+front, front_draw, front_p, front_g = region(+1)
+tail, tail_draw, tail_p, tail_g = region(-1)
 
 (name, img), = [t for t in tex.textures(src) if t[0].split()[-1].startswith('slm_0')]   # slm_01/02/03: the body
 KEY = name.split()[-1]
@@ -138,19 +148,93 @@ def rooster(bg):
     f[y0:y0 + h, x0:x0 + w] = a * alpha + f[y0:y0 + h, x0:x0 + w] * (1 - alpha)
     return cv2.resize(np.clip(f, 0, 255).astype(np.uint8), (S, S), interpolation=cv2.INTER_AREA)
 
-new = np.zeros((H * 2, W * 2, 4), np.uint8)
-new[:H, :W] = img; new[H:, :W] = img
-new[:, W:, 3] = 255
-new[0:S, W:, :3] = smiley(RED);       new[S:H, W:, :3] = RED            # rows: smiley, red
-new[H:H + S, W:, :3] = rooster(GREEN); new[H + S:, W:, :3] = GREEN      # rows: rooster, green
-V0 = {+1: 0.0, -1: 0.5}                                                 # clipart rows (v)
-BG = {+1: (0.75, 0.375), -1: (0.75, 0.875)}                             # plain background texel
+# Each tentacle gets its own image: a map looking down the tentacle (angle from its facing
+# direction, measured from a point inside it), so every bit of its surface has its own
+# pixels. The body texture is copied in, then the hood (edge decided per pixel) and the
+# clipart are painted over it. Nothing is shared with the rest of the jelly, so nothing bleeds.
+M = 256                                                   # each tentacle map is M x M
+TW, TH = 4 * W, 2 * H                                     # original | front map / rear map
+new = np.zeros((TH, TW, 4), np.uint8); new[..., 3] = 255
+new[:H, :W] = img
+SMILE_IMG, ROOSTER_IMG = smiley(RED), rooster(GREEN)
+ORIG = img.astype(np.float32)
 
-def clip_uv(p, s):
-    c, rt, up, r_in = front_p if s > 0 else tail_p
-    fs = 0.92 * r_in / (SMILE_R if s > 0 else ROOSTER_R)
-    a = np.clip((p - c) @ rt / fs + 0.5, 0.01, 0.99); b = np.clip(0.5 - (p - c) @ up / fs, 0.01, 0.99)
-    return 0.5 + 0.5 * a, V0[s] + 0.25 * b
+def sample(im, u, v):
+    h, w = im.shape[:2]
+    x = np.clip(u * w - 0.5, 0, w - 1.001); y = np.clip(v * h - 0.5, 0, h - 1.001)
+    x0, y0 = x.astype(int), y.astype(int); fx, fy = (x - x0)[..., None], (y - y0)[..., None]
+    return (im[y0, x0] * (1 - fx) * (1 - fy) + im[y0, x0 + 1] * fx * (1 - fy) +
+            im[y0 + 1, x0] * (1 - fx) * fy + im[y0 + 1, x0 + 1] * fx * fy)
+
+def tentacle_map(s, touch, proj, g, colour, clip_img, clip_r):
+    dist, ring, cut = g
+    c, rt, up, r_in = proj
+    d = np.array([s, 0.0, 0.0])
+    ids = np.unique(TV[touch]); o = VP[ids].mean(0) - d * float(os.environ.get('JELLY_DEPTH', '0.3'))   # a point inside the tentacle
+    def ang(P):
+        v = P - o; v = v / (np.linalg.norm(v, axis=-1, keepdims=True) + 1e-9)
+        a = np.arctan2(np.hypot(v @ rt, v @ up), v @ d); f = np.arctan2(v @ up, v @ rt)
+        return a, f
+    amax = ang(VP[ids])[0].max() * 1.02
+    def mapxy(P):
+        a, f = ang(P); r = 0.48 * a / amax
+        return np.stack([0.5 + r * np.cos(f), 0.5 - r * np.sin(f)], -1)
+    U = 2; N = M * U
+    col = np.zeros((N, N, 3), np.float32); zb = np.full((N, N), -np.inf); cov = np.zeros((N, N), int)
+    fs = 0.92 * r_in / clip_r
+    # long skirt triangles that only graze the hood get squashed to a sliver in the map
+    # (they'd show streaks): they keep the plain body texture
+    def area2(Q): return 0.5 * abs((Q[1, 0] - Q[0, 0]) * (Q[2, 1] - Q[0, 1]) - (Q[2, 0] - Q[0, 0]) * (Q[1, 1] - Q[0, 1]))
+    ks = np.where(touch)[0]
+    ratio = np.array([area2(mapxy(np.array(tris[k][0]))) / (0.5 * np.linalg.norm(np.cross(*(np.array(tris[k][0])[1:] - tris[k][0][0]))) + 1e-12) for k in ks])
+    keep = ratio >= 0.35 * np.median(ratio)
+    print(('front' if s > 0 else 'tail'), 'map triangles', keep.sum(), 'left on body texture', (~keep).sum())
+    uvmap = {}
+    for k in ks[~keep]:                                   # squashed but wholly under the hood: plain hood colour
+        if ((dist[TV[k]] <= ring) & (VP[TV[k], 1] <= cut)).all(): uvmap[k] = 'solid'
+    for k in ks[keep]:
+        P = np.array(tris[k][0]); q = mapxy(P) * N; uvmap[k] = mapxy(P)
+        x0, y0 = np.floor(q.min(0)).astype(int); x1, y1 = np.ceil(q.max(0)).astype(int)
+        gx, gy = np.meshgrid(np.arange(max(x0, 0), min(x1, N - 1) + 1) + 0.5, np.arange(max(y0, 0), min(y1, N - 1) + 1) + 0.5)
+        dd = (q[1, 0] - q[0, 0]) * (q[2, 1] - q[0, 1]) - (q[2, 0] - q[0, 0]) * (q[1, 1] - q[0, 1])
+        if abs(dd) < 1e-12 or gx.size == 0: continue
+        w1 = ((gx - q[0, 0]) * (q[2, 1] - q[0, 1]) - (q[2, 0] - q[0, 0]) * (gy - q[0, 1])) / dd
+        w2 = ((q[1, 0] - q[0, 0]) * (gy - q[0, 1]) - (gx - q[0, 0]) * (q[1, 1] - q[0, 1])) / dd
+        w0 = 1 - w1 - w2; on = (w0 >= -0.03) & (w1 >= -0.03) & (w2 >= -0.03)
+        W3 = np.stack([w0, w1, w2], -1)
+        pos = W3 @ P                                          # surface point of each pixel
+        z = np.linalg.norm(pos - o, axis=-1)                  # outer surface wins
+        yi, xi = gy.astype(int), gx.astype(int)
+        on &= z > zb[yi, xi]
+        if not on.any(): continue
+        uv = np.array([[u[0] % 1.0, u[1] % 1.0] for u in tris[k][2]])
+        tuv = W3 @ uv
+        body = sample(ORIG[..., :3], tuv[..., 0], tuv[..., 1])
+        gd = W3 @ dist[TV[k]]
+        hood = ((gd <= ring) & (pos[..., 1] <= cut)).astype(np.float32)[..., None]
+        a_ = (pos - c) @ rt / fs + 0.5; b_ = 0.5 - (pos - c) @ up / fs
+        inclip = ((a_ > 0) & (a_ < 1) & (b_ > 0) & (b_ < 1) & ((pos - c) @ d > -0.02))[..., None]
+        art = sample(clip_img.astype(np.float32), np.clip(a_, 0, 1), np.clip(b_, 0, 1))
+        hc = np.where(inclip, art, np.array(colour, np.float32))
+        px = body * (1 - hood) + hc * hood
+        col[yi[on], xi[on]] = px[on]; zb[yi[on], xi[on]] = z[on]
+        cov[yi[on], xi[on]] += 1
+    print(('front' if s > 0 else 'tail'), 'map pixels drawn over twice', int((cov > 1).sum()))
+    # pixels no triangle covered: pull in the nearest covered colour (keeps edges clean when filtered)
+    hole = ~np.isfinite(zb)
+    if hole.any() and (~hole).any():
+        from scipy import ndimage
+        idx = ndimage.distance_transform_edt(hole, return_distances=False, return_indices=True)
+        col = col[idx[0], idx[1]]
+    return cv2.resize(col, (M, M), interpolation=cv2.INTER_AREA), uvmap
+
+fmap, front_uv = tentacle_map(+1, front, front_p, front_g, RED, SMILE_IMG, SMILE_R)
+tmap, tail_uv = tentacle_map(-1, tail, tail_p, tail_g, GREEN, ROOSTER_IMG, ROOSTER_R)
+new[:M, 2 * W:2 * W + M, :3] = np.clip(fmap, 0, 255)
+new[H:H + 16, :W, :3] = RED; new[H + 16:H + 32, :W, :3] = GREEN          # plain hood colour patches
+SOLID = {+1: (0.5 * W / TW, (H + 8) / TH), -1: (0.5 * W / TW, (H + 24) / TH)}
+new[H:H + M, 2 * W:2 * W + M, :3] = np.clip(tmap, 0, 255)
+MAP_AT = {+1: (2 * W / TW, 0.0), -1: (2 * W / TW, H / TH)}
 
 # UVs: walk the mesh's triangle lists
 k = 0; o = 0
@@ -169,17 +253,19 @@ while o + 16 <= len(data):
             assert op == 0x0054, hex(op)
             for _ in range(n):
                 uv = list(struct.unpack_from('<6f', me, c + 6))
-                s = +1 if front[k] else -1 if tail[k] else 0
-                drawn = front_draw[k] if s > 0 else tail_draw[k] if s < 0 else False
-                for j, p in enumerate(tris[k][0]):
-                    if drawn: uv[2 * j], uv[2 * j + 1] = clip_uv(p, s)
-                    elif s: uv[2 * j], uv[2 * j + 1] = BG[s]
-                    else: uv[2 * j], uv[2 * j + 1] = (uv[2 * j] % 1.0) * 0.5, (uv[2 * j + 1] % 1.0) * 0.5
+                s = +1 if k in front_uv else -1 if k in tail_uv else 0
+                for j in range(3):
+                    if s and isinstance((front_uv if s > 0 else tail_uv)[k], str):
+                        uv[2 * j], uv[2 * j + 1] = SOLID[s]
+                    elif s:
+                        mu, mv = (front_uv if s > 0 else tail_uv)[k][j]; ox, oy = MAP_AT[s]
+                        uv[2 * j], uv[2 * j + 1] = ox + mu * M / TW, oy + mv * M / TH
+                    else: uv[2 * j], uv[2 * j + 1] = (uv[2 * j] % 1.0) * W / TW, (uv[2 * j + 1] % 1.0) * H / TH
                 struct.pack_into('<6f', data, base + c + 6, *uv); c += 30; k += 1
     o += sz
 assert k == len(tris), (k, len(tris))
 open(f'{out}/uv.DAT', 'wb').write(data)
 raw = f'{out}/{KEY}.rgba'; new.tofile(raw)
-Image.fromarray(new[..., :3]).resize((W * 4, H * 4), Image.NEAREST).save(f'{out}/{KEY}.png')
-subprocess.run(['/home/claude/ffxi_modder/target/release/retexture', f'{out}/uv.DAT', f'{out}/front.DAT', f'{KEY}={raw}:{W*2}x{H*2}'], check=True, stdout=subprocess.DEVNULL)
+Image.fromarray(new[..., :3]).save(f'{out}/{KEY}.png')
+subprocess.run(['/home/claude/ffxi_modder/target/release/retexture', f'{out}/uv.DAT', f'{out}/front.DAT', f'{KEY}={raw}:{TW}x{TH}'], check=True, stdout=subprocess.DEVNULL)
 print('wrote', f'{out}/front.DAT')
