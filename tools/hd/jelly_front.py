@@ -41,6 +41,10 @@ for a, b, c_ in TV:
     for u, v in ((a, b), (b, c_), (c_, a)):
         w = float(np.linalg.norm(VP[u] - VP[v])); ADJ[u].append((v, w)); ADJ[v].append((u, w))
 
+from scipy.spatial import cKDTree
+_md, MIRROR = cKDTree(VP).query(VP * [1, 1, -1])         # each vertex's mirror twin
+if _md.max() > 1e-3: MIRROR = np.arange(len(VP))           # not a mirrored mesh: leave as is
+
 def geodesic(src):
     dist = np.full(len(VP), np.inf); dist[src] = 0; q = [(0.0, src)]
     while q:
@@ -58,6 +62,9 @@ def region(s):
     vu = np.where(VP[:, 1] < top + 0.46 * H_)[0]
     tip = vu[np.argmax(s * VP[vu, 0])]
     dist = geodesic(tip)
+    # the mesh's points are mirror-symmetric (z -> -z) but its triangles aren't, so paths along
+    # edges run longer on one side; take the shorter of each point and its mirror twin
+    dist = np.minimum(dist, dist[MIRROR])
     ring = np.percentile(dist[TV[old]].max(1), NECK)
     # neck crease: down the centre line, the dip between the tentacle's bulge and the body
     cl = VP[(np.abs(VP[:, 2]) < 0.04) & (s * VP[:, 0] > 0.3)]
