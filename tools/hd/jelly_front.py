@@ -9,7 +9,7 @@ can reach, get the clipart's plain background colour.
 Texture (2x wide, 2x tall):  left top = original  |  right: smiley, red, rooster, green.
 If the jelly is already red the front goes purple; if already green the tail goes purple.
 
-usage: python3 jelly_marker.py <in.DAT> <out_dir>   (writes front.DAT and slm_01.png)
+usage: python3 jelly_marker.py <in.DAT> <out_dir>   (writes front.DAT and a texture png)
 """
 import sys, os, struct, subprocess
 import numpy as np, cv2
@@ -45,7 +45,8 @@ def region(s):
 front, front_draw, front_p = region(+1)
 tail, tail_draw, tail_p = region(-1)
 
-(name, img), = [t for t in tex.textures(src) if 'slm_01' in t[0]]
+(name, img), = [t for t in tex.textures(src) if t[0].split()[-1].startswith('slm_0')]   # slm_01/02/03: the body
+KEY = name.split()[-1]
 H, W = img.shape[:2]; S = W                                    # clipart images are S x S
 hsv = cv2.cvtColor(np.clip(img[..., :3], 0, 255).astype(np.uint8), cv2.COLOR_RGB2HSV)
 hue = np.median(hsv[..., 0][hsv[..., 1] > 40]) if (hsv[..., 1] > 40).any() else 0
@@ -67,7 +68,7 @@ def smiley(bg):
     cv2.ellipse(f, (c, c + int(R * 0.02)), (int(R * 0.58), int(R * 0.5)), 0, 20, 160, (25, 15, 5), int(R * 0.1), cv2.LINE_AA)
     return cv2.resize(f, (S, S), interpolation=cv2.INTER_AREA)
 
-ROOSTER_SRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'rooster_src.png')  # next to this script
+ROOSTER_SRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'rooster_src.png')
 
 def rooster(bg):
     """the user's rooster tail picture: white background cut out (flood fill from the edges,
@@ -149,7 +150,7 @@ while o + 16 <= len(data):
     o += sz
 assert k == len(tris), (k, len(tris))
 open(f'{out}/uv.DAT', 'wb').write(data)
-raw = f'{out}/slm_01.rgba'; new.tofile(raw)
-Image.fromarray(new[..., :3]).resize((W * 4, H * 4), Image.NEAREST).save(f'{out}/slm_01.png')
-subprocess.run(['/home/claude/ffxi_modder/target/release/retexture', f'{out}/uv.DAT', f'{out}/front.DAT', f'slm_01={raw}:{W*2}x{H*2}'], check=True, stdout=subprocess.DEVNULL)
+raw = f'{out}/{KEY}.rgba'; new.tofile(raw)
+Image.fromarray(new[..., :3]).resize((W * 4, H * 4), Image.NEAREST).save(f'{out}/{KEY}.png')
+subprocess.run(['/home/claude/ffxi_modder/target/release/retexture', f'{out}/uv.DAT', f'{out}/front.DAT', f'{KEY}={raw}:{W*2}x{H*2}'], check=True, stdout=subprocess.DEVNULL)
 print('wrote', f'{out}/front.DAT')
