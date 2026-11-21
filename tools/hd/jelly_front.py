@@ -24,18 +24,47 @@ C = np.array([np.mean(t[0], 0) for t in tris])
 NF = np.array([np.mean(t[1], 0) for t in tris]); NF /= np.linalg.norm(NF, axis=1, keepdims=True) + 1e-9
 top, bot = C[:, 1].min(), C[:, 1].max(); H_ = bot - top       # FFXI y points down: top = min
 upper = C[:, 1] < top + 0.46 * H_
-SECTOR = 2.2                                                  # x must beat SECTOR*|z|
+SECTOR = 2.2                                                  # rough pick: x must beat SECTOR*|z|
+NECK = float(os.environ.get('JELLY_NECK', '80'))              # ring size: percentile of the rough pick
+
+# surface graph: vertices shared by triangles, edges weighted by length
+import heapq
+key = lambda p: tuple(np.round(p, 5))
+VID = {}
+TV = np.array([[VID.setdefault(key(p), len(VID)) for p in t[0]] for t in tris])
+VP = np.zeros((len(VID), 3))
+for t, ids in zip(tris, TV):
+    for p, i in zip(t[0], ids): VP[i] = p
+ADJ = [[] for _ in range(len(VID))]
+for a, b, c_ in TV:
+    for u, v in ((a, b), (b, c_), (c_, a)):
+        w = float(np.linalg.norm(VP[u] - VP[v])); ADJ[u].append((v, w)); ADJ[v].append((u, w))
+
+def geodesic(src):
+    dist = np.full(len(VP), np.inf); dist[src] = 0; q = [(0.0, src)]
+    while q:
+        d_, u = heapq.heappop(q)
+        if d_ > dist[u]: continue
+        for v, w in ADJ[u]:
+            if d_ + w < dist[v]: dist[v] = d_ + w; heapq.heappush(q, (dist[v], v))
+    return dist
 
 def region(s):
-    """s=+1 front tentacle, -1 tail. returns (all triangles, clipart triangles, projection)"""
-    lobe = upper & (s * C[:, 0] > 0.18) & (s * C[:, 0] > SECTOR * np.abs(C[:, 2]))
+    """s=+1 front tentacle, -1 tail. returns (all triangles, clipart triangles, projection)
+    The tentacle = every triangle within a set distance of its tip, measured across the
+    surface: that gives one solid patch with a smooth ring for a neck (no notches, no holes)."""
+    old = upper & (s * C[:, 0] > 0.18) & (s * C[:, 0] > SECTOR * np.abs(C[:, 2]))   # rough pick, sizes the ring
+    vu = np.where(VP[:, 1] < top + 0.46 * H_)[0]
+    tip = vu[np.argmax(s * VP[vu, 0])]
+    dist = geodesic(tip)
+    ring = np.percentile(dist[TV[old]].max(1), NECK)
+    lobe = dist[TV].max(1) <= ring
     d = np.array([s, 0.0, 0.0]); up = np.array([0, -1.0, 0]); rt = np.cross(up, d)
     draw = lobe & (s * NF[:, 0] > 0)
     area = lambda P: 0.5 * abs(np.cross(P[1] - P[0], P[2] - P[0]) @ d)
     A = np.array([area(np.array(tris[k][0])) for k in np.where(draw)[0]])
     c = (C[draw] * A[:, None]).sum(0) / A.sum()
     draw &= s * C[:, 0] > s * c[0] - 0.04            # forward-facing skirt further back: background
-    key = lambda p: tuple(np.round(p, 5))
     inner = {key(p) for k in np.where(draw)[0] for p in tris[k][0]}
     edge = [p for k in np.where(~draw)[0] for p in tris[k][0] if key(p) in inner]
     r_in = min(np.hypot((p - c) @ rt, (p - c) @ up) for p in edge)
