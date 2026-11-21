@@ -10,6 +10,7 @@ name = "InstallALL"
 path = "src/main.rs"
 
 [dependencies]
+sha1_smol = "1"
 eframe = { version = "0.31", default-features = false, features = ["default_fonts", "glow", "x11", "wayland"] }
 ureq = { version = "2.10", default-features = false, features = ["tls", "native-certs"] }
 sevenz-rust = "0.6"

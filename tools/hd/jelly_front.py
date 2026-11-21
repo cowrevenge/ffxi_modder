@@ -1,98 +1,129 @@
-"""Jelly front marker: the tentacle (lobe) on the jelly's front gets its own copy of the
-texture, reshaded red (purple if the base is already red), so you can tell its front from
-its back. The texture is doubled in height: the top half is the original, the bottom half
-the reshaded copy; front-lobe triangles have their V moved into the bottom half, every
-other triangle into the top half. Same mesh, same triangle count, file size grows only by
-the larger texture.
+"""Jelly marker: front tentacle red with a yellow smiley, rear tentacle (the tail) green with a
+rooster tail, so THF can tell front from back at a glance.
 
-usage: python3 front_tint.py <in.DAT> <out_dir>   (writes front.DAT and preview pngs)
+Each tentacle is ONE region: every triangle of it is mapped onto a flat clipart image
+(projected straight from the front / straight from behind), so the neck keeps one clean
+outline. Triangles of the tentacle that face away, or sit further back than the clipart
+can reach, get the clipart's plain background colour.
+
+Texture (2x wide, 2x tall):  left top = original  |  right: smiley, red, rooster, green.
+If the jelly is already red the front goes purple; if already green the tail goes purple.
+
+usage: python3 jelly_marker.py <in.DAT> <out_dir>   (writes front.DAT and slm_01.png)
 """
 import sys, os, struct, subprocess
 import numpy as np, cv2
 sys.path.insert(0, '/home/claude/work/ctr'); sys.path.insert(0, '/home/claude/work/hd')
-import raster, render_gear as rg, tex
+import raster, tex
 from PIL import Image
 
 src, out = sys.argv[1], sys.argv[2]; os.makedirs(out, exist_ok=True)
 data = bytearray(open(src, 'rb').read())
 tris = raster.load(src, [src])
 C = np.array([np.mean(t[0], 0) for t in tris])
-top, bot = C[:, 1].min(), C[:, 1].max()           # FFXI y points down: top = min
-H_ = bot - top
-# front lobe: upper part of the jelly, in the +x (forward) sector
-lobe = (C[:, 1] < top + 0.46 * H_) & (C[:, 0] > 0.18) & (C[:, 0] > 1.4 * np.abs(C[:, 2]))
-print('front lobe triangles', lobe.sum(), 'of', len(tris))
-# smiley: lobe triangles that look forward get a flat front projection onto a face image
 NF = np.array([np.mean(t[1], 0) for t in tris]); NF /= np.linalg.norm(NF, axis=1, keepdims=True) + 1e-9
-# project along the way the lobe points (mean normal of its forward half), not plain +x
-d = np.array([1.0, 0, 0])   # face looks straight forward
-face = lobe & (NF @ d > 0.0)
-up = np.array([0, -1.0, 0]); up -= d * (up @ d); up /= np.linalg.norm(up); rt = np.cross(up, d)
-FP = np.array([p for t, f in zip(tris, face) if f for p in t[0]])
-# centre the face on the lobe tip; size it so the smiley sits inside the face triangles
-# (its edge must not cross into the triangles that keep the normal red texture)
-LP = np.array([p for t, f in zip(tris, lobe) if f for p in t[0]])
-# centre: area-weighted middle of the forward-facing lobe, as seen from the front
-def _area(P): a, b = np.array([[p @ rt, p @ up] for p in P]).T; return 0.5 * abs((a[1]-a[0])*(b[2]-b[0]) - (a[2]-a[0])*(b[1]-b[0]))
-_A = np.array([_area(t[0]) for t, f in zip(tris, face) if f]); _M = np.array([np.mean(t[0], 0) for t, f in zip(tris, face) if f])
-_c = (_M * _A[:, None]).sum(0) / _A.sum()
-fac, fbc = _c @ rt, _c @ up
-# forward-facing bits further back (the far side of the lobe's skirt) would show the face too
-face &= C[:, 0] > _c[0] - 0.04
-key = lambda p: tuple(np.round(p, 5))
-inner = {key(p) for t, f in zip(tris, face) if f for p in t[0]}
-edge = [p for k, t in enumerate(tris) if not face[k] for p in t[0] if key(p) in inner]
-r_all = np.sort([np.hypot(p @ rt - fac, p @ up - fbc) for p in edge]); print("edge r", np.round(r_all[:12], 3))
-r_in = r_all[0]
-fs = 0.92 * r_in / 0.36          # smiley radius (0.36 of the face image) = 0.92 of r_in
-print('face r_in', round(r_in, 4), 'lobe len', round(float(np.ptp(LP @ d)), 4))
-print('face triangles', face.sum())
+top, bot = C[:, 1].min(), C[:, 1].max(); H_ = bot - top       # FFXI y points down: top = min
+upper = C[:, 1] < top + 0.46 * H_
+SECTOR = 2.2                                                  # x must beat SECTOR*|z|
 
-# texture
+def region(s):
+    """s=+1 front tentacle, -1 tail. returns (all triangles, clipart triangles, projection)"""
+    lobe = upper & (s * C[:, 0] > 0.18) & (s * C[:, 0] > SECTOR * np.abs(C[:, 2]))
+    d = np.array([s, 0.0, 0.0]); up = np.array([0, -1.0, 0]); rt = np.cross(up, d)
+    draw = lobe & (s * NF[:, 0] > 0)
+    area = lambda P: 0.5 * abs(np.cross(P[1] - P[0], P[2] - P[0]) @ d)
+    A = np.array([area(np.array(tris[k][0])) for k in np.where(draw)[0]])
+    c = (C[draw] * A[:, None]).sum(0) / A.sum()
+    draw &= s * C[:, 0] > s * c[0] - 0.04            # forward-facing skirt further back: background
+    key = lambda p: tuple(np.round(p, 5))
+    inner = {key(p) for k in np.where(draw)[0] for p in tris[k][0]}
+    edge = [p for k in np.where(~draw)[0] for p in tris[k][0] if key(p) in inner]
+    r_in = min(np.hypot((p - c) @ rt, (p - c) @ up) for p in edge)
+    print(('front' if s > 0 else 'tail'), 'triangles', lobe.sum(), 'clipart', draw.sum(), 'r_in', round(r_in, 4))
+    return lobe, draw, (c, rt, up, r_in)
+
+front, front_draw, front_p = region(+1)
+tail, tail_draw, tail_p = region(-1)
+
 (name, img), = [t for t in tex.textures(src) if 'slm_01' in t[0]]
-H, W = img.shape[:2]
-rgb = img[..., :3].astype(np.float32)
-# how far up the lobe each texel sits (fade the tint in from the lobe base to its tip)
-height = np.zeros((H, W), np.float32); cnt = np.zeros((H, W), np.float32)
-for t, f in zip(tris, lobe):
-    if not f: continue
-    q = np.array([[u[0] * W, u[1] * H] for u in t[2]], np.float32)
-    m = np.zeros((H, W), np.uint8); cv2.fillConvexPoly(m, np.round(q * 4).astype(np.int32), 1, shift=2)
-    hgt = (top + 0.46 * H_ - np.mean([p[1] for p in t[0]])) / (0.46 * H_)   # 0 at base, 1 at tip
-    height += m * hgt; cnt += m
-w = np.clip((np.where(cnt > 0, height / np.maximum(cnt, 1), 0) - 0.10) * 3.6, 0, 1)
-w = cv2.GaussianBlur(w, (0, 0), 1.5)
-# base colour: red already? then purple
-hsv = cv2.cvtColor(np.clip(rgb, 0, 255).astype(np.uint8)[None].reshape(H, W, 3), cv2.COLOR_RGB2HSV)
+H, W = img.shape[:2]; S = W                                    # clipart images are S x S
+hsv = cv2.cvtColor(np.clip(img[..., :3], 0, 255).astype(np.uint8), cv2.COLOR_RGB2HSV)
 hue = np.median(hsv[..., 0][hsv[..., 1] > 40]) if (hsv[..., 1] > 40).any() else 0
-reddish = (hue < 12 or hue > 165) and np.median(hsv[..., 1]) > 60
-dark, lit = (np.array([165, 40, 220]), np.array([245, 190, 255])) if reddish else (np.array([215, 30, 25]), np.array([255, 170, 140]))
-print('base hue', hue, '-> marker', 'purple' if reddish else 'red')
-L = rgb @ np.array([0.299, 0.587, 0.114], np.float32)
-lo, hi = np.percentile(L, 5), np.percentile(L, 99)
-t = np.clip((L - lo) / max(hi - lo, 1), 0, 1) ** 0.6
-shade = dark[None, None] * (1 - t[..., None]) + lit[None, None] * t[..., None]
-marked = rgb * (1 - w[..., None]) + shade * w[..., None]
-new = np.zeros((H * 2, W * 2, 4), np.uint8)
-new[:H, :W, :3] = np.clip(rgb, 0, 255); new[H:, :W, :3] = np.clip(marked, 0, 255)
-new[:H, :W, 3] = img[..., 3]; new[H:, :W, 3] = img[..., 3]
-# face image (W x W) at the right of the marked band: marker red, yellow smiley on top
-S = W; SS = S * 4                                      # draw 4x, then shrink for smooth edges
-fimg = np.zeros((SS, SS, 3), np.uint8); fimg[:] = shade[w > 0.5].mean(0) if (w > 0.5).any() else dark
-c = SS // 2; R = int(SS * 0.36)
-cv2.circle(fimg, (c, c), R + SS // 64, (60, 30, 0), -1, cv2.LINE_AA)                 # dark rim
-cv2.circle(fimg, (c, c), R, (255, 232, 40), -1, cv2.LINE_AA)                         # yellow
-for ex in (-1, 1):
-    cv2.ellipse(fimg, (c + ex * int(R * 0.36), c - int(R * 0.28)), (int(R * 0.11), int(R * 0.2)), 0, 0, 360, (25, 15, 5), -1, cv2.LINE_AA)
-cv2.ellipse(fimg, (c, c + int(R * 0.02)), (int(R * 0.58), int(R * 0.5)), 0, 20, 160, (25, 15, 5), int(R * 0.1), cv2.LINE_AA)
-fimg = cv2.resize(fimg, (S, S), interpolation=cv2.INTER_AREA)
-new[H:H + S, W:W + S, :3] = fimg; new[H:H + S, W:W + S, 3] = 255
-new[H + S:, W:, :3] = fimg[-1:, :, :]; new[H + S:, W:, 3] = 255
+sat = np.median(hsv[..., 1]) > 60
+PURPLE = (185, 80, 230)
+RED = PURPLE if (hue < 12 or hue > 165) and sat else (228, 72, 52)
+GREEN = PURPLE if 35 <= hue <= 85 and sat else (45, 175, 60)
+print('base hue', hue, 'front', RED, 'tail', GREEN)
 
-# UVs: walk the mesh's triangle lists and squeeze every V into its half
-k = 0
-for (hdr, kind, me, off), _ in [((c[0], c[1], c[2], o), o) for c, o in zip(rg.chunks(data), [0] * 999)] if False else []: pass
-o = 0
+SMILE_R, ROOSTER_R = 0.36, 0.44                                # clipart radius, image units
+
+def smiley(bg):
+    SS = S * 4; f = np.zeros((SS, SS, 3), np.uint8); f[:] = bg
+    c = SS // 2; R = int(SS * SMILE_R)
+    cv2.circle(f, (c, c), R + SS // 64, (60, 30, 0), -1, cv2.LINE_AA)
+    cv2.circle(f, (c, c), R, (255, 232, 40), -1, cv2.LINE_AA)
+    for ex in (-1, 1):
+        cv2.ellipse(f, (c + ex * int(R * 0.36), c - int(R * 0.28)), (int(R * 0.11), int(R * 0.2)), 0, 0, 360, (25, 15, 5), -1, cv2.LINE_AA)
+    cv2.ellipse(f, (c, c + int(R * 0.02)), (int(R * 0.58), int(R * 0.5)), 0, 20, 160, (25, 15, 5), int(R * 0.1), cv2.LINE_AA)
+    return cv2.resize(f, (S, S), interpolation=cv2.INTER_AREA)
+
+ROOSTER_SRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'rooster_src.png')  # next to this script
+
+def rooster(bg):
+    """the user's rooster tail picture: white background cut out (flood fill from the edges,
+    then the pale fringe), a dark outline like the smiley's rim, set on the tail colour and
+    fitted inside the safe circle"""
+    a = np.array(Image.open(ROOSTER_SRC).convert('RGB')).astype(np.float32)
+    dark = np.abs(a - [34, 36, 42]).sum(2) < 6                  # screenshot's dark border on the right
+    cols = [x for x in range(a.shape[1]) if dark[:, x].mean() > 0.9]
+    if cols: a = a[:, :cols[0]]
+    UP = 6                                                       # work big so the outline is smooth
+    a = cv2.resize(a, (a.shape[1] * UP, a.shape[0] * UP), interpolation=cv2.INTER_CUBIC)
+    mn, mxc = a.min(2), a.max(2)
+    pale = (mn > 175) & (mxc - mn < 40)                          # white / light grey, not orange
+    # edge check: background = pale pixels connected to the picture's border
+    n, lab = cv2.connectedComponents(pale.astype(np.uint8), connectivity=4)
+    edge_labels = set(np.unique(np.concatenate([lab[0], lab[-1], lab[:, 0], lab[:, -1]]))) - {0}
+    bgm = np.isin(lab, list(edge_labels))
+    # white pockets between feathers that don't touch the edge: drop the bigger ones too
+    for l in range(1, n):
+        if l not in edge_labels and (lab == l).sum() > 12 * UP * UP: bgm |= lab == l
+    solid = ~bgm
+    solid = cv2.morphologyEx(solid.astype(np.uint8), cv2.MORPH_OPEN, np.ones((UP, UP), np.uint8))   # drop specks
+    solid = cv2.erode(solid, np.ones((3, 3), np.uint8), iterations=UP // 2)                    # shave the pale fringe
+    ys, xs = np.where(solid > 0)
+    sl = (slice(ys.min(), ys.max() + 1), slice(xs.min(), xs.max() + 1))
+    a, solid = a[sl], solid[sl]
+    # outline: a dark band just inside the edge, same colour as the smiley's rim
+    pad = np.pad(solid, 1)                                      # pad: the picture's cut-off edge gets outlined too
+    ring = (pad - cv2.erode(pad, np.ones((3, 3), np.uint8), iterations=UP * 2))[1:-1, 1:-1]
+    a[ring > 0] = (60, 30, 0)
+    alpha = cv2.GaussianBlur(solid.astype(np.float32), (0, 0), UP * 0.25)
+    SS = S * 4; R = ROOSTER_R * SS
+    k = 2 * R / np.hypot(*a.shape[:2]) * 1.3                     # fit inside the circle the tentacle can show
+    h, w = int(a.shape[0] * k), int(a.shape[1] * k)
+    a = cv2.resize(a, (w, h), interpolation=cv2.INTER_AREA); alpha = cv2.resize(alpha, (w, h), interpolation=cv2.INTER_AREA)[..., None]
+    f = np.zeros((SS, SS, 3), np.float32); f[:] = bg
+    y0, x0 = (SS - h) // 2, (SS - w) // 2
+    f[y0:y0 + h, x0:x0 + w] = a * alpha + f[y0:y0 + h, x0:x0 + w] * (1 - alpha)
+    return cv2.resize(np.clip(f, 0, 255).astype(np.uint8), (S, S), interpolation=cv2.INTER_AREA)
+
+new = np.zeros((H * 2, W * 2, 4), np.uint8)
+new[:H, :W] = img; new[H:, :W] = img
+new[:, W:, 3] = 255
+new[0:S, W:, :3] = smiley(RED);       new[S:H, W:, :3] = RED            # rows: smiley, red
+new[H:H + S, W:, :3] = rooster(GREEN); new[H + S:, W:, :3] = GREEN      # rows: rooster, green
+V0 = {+1: 0.0, -1: 0.5}                                                 # clipart rows (v)
+BG = {+1: (0.75, 0.375), -1: (0.75, 0.875)}                             # plain background texel
+
+def clip_uv(p, s):
+    c, rt, up, r_in = front_p if s > 0 else tail_p
+    fs = 0.92 * r_in / (SMILE_R if s > 0 else ROOSTER_R)
+    a = np.clip((p - c) @ rt / fs + 0.5, 0.01, 0.99); b = np.clip(0.5 - (p - c) @ up / fs, 0.01, 0.99)
+    return 0.5 + 0.5 * a, V0[s] + 0.25 * b
+
+# UVs: walk the mesh's triangle lists
+k = 0; o = 0
 while o + 16 <= len(data):
     v = struct.unpack_from('<I', data, o + 4)[0]; kind = v & 0x7f; sz = ((v >> 7) & 0x7ffff) * 16
     if sz < 16: break
@@ -108,14 +139,12 @@ while o + 16 <= len(data):
             assert op == 0x0054, hex(op)
             for _ in range(n):
                 uv = list(struct.unpack_from('<6f', me, c + 6))
-                f = lobe[k]
-                if face[k]:
-                    for j, p in enumerate(tris[k][0]):
-                        uv[2 * j] = 0.5 + 0.5 * np.clip((p @ rt - fac) / fs + 0.5, 0.01, 0.99)
-                        uv[2 * j + 1] = 0.5 + 0.25 * np.clip(0.5 - (p @ up - fbc) / fs, 0.01, 0.99)
-                else:
-                    for j in (0, 2, 4): uv[j] = (uv[j] % 1.0) * 0.5
-                    for j in (1, 3, 5): uv[j] = (uv[j] % 1.0) * 0.5 + (0.5 if f else 0.0)
+                s = +1 if front[k] else -1 if tail[k] else 0
+                drawn = front_draw[k] if s > 0 else tail_draw[k] if s < 0 else False
+                for j, p in enumerate(tris[k][0]):
+                    if drawn: uv[2 * j], uv[2 * j + 1] = clip_uv(p, s)
+                    elif s: uv[2 * j], uv[2 * j + 1] = BG[s]
+                    else: uv[2 * j], uv[2 * j + 1] = (uv[2 * j] % 1.0) * 0.5, (uv[2 * j + 1] % 1.0) * 0.5
                 struct.pack_into('<6f', data, base + c + 6, *uv); c += 30; k += 1
     o += sz
 assert k == len(tris), (k, len(tris))

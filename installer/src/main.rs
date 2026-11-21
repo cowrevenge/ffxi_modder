@@ -14,6 +14,39 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 const BASE_URL: &str = "https://github.com/cowrevenge/ffxi_mod_files/raw/main/downloads/";
+/// lists downloads/ with each file's git blob sha: one request tells which downloads changed
+const LIST_URL: &str = "https://api.github.com/repos/cowrevenge/ffxi_mod_files/contents/downloads?ref=main";
+
+/// git's blob sha1 of a file: the same id GitHub lists, so a local file can be compared to it
+fn blob_sha(path: &Path) -> Option<String> {
+    let data = fs::read(path).ok()?;
+    let mut h = sha1_smol::Sha1::new();
+    h.update(format!("blob {}\0", data.len()).as_bytes()); h.update(&data);
+    Some(h.digest().to_string())
+}
+
+/// where the sha of the installed download is kept (inside the mod's own folder)
+fn ver_file(dats: &Path, item: &Item) -> PathBuf { dats.join(item.folder).join(".installall").join(format!("{}.sha", item.file)) }
+
+/// file name -> blob sha, from GitHub's listing of downloads/
+fn remote_shas() -> Result<std::collections::HashMap<String, String>, String> {
+    let url = std::env::var("INSTALLALL_LIST_URL").unwrap_or(LIST_URL.to_string());
+    let body = agent().get(&url).set("User-Agent", "InstallALL").set("Accept", "application/vnd.github+json")
+        .call().map_err(|e| e.to_string())?.into_string().map_err(|e| e.to_string())?;
+    // small scan instead of a JSON library: each entry has "name": "..." then "sha": "..."
+    let val = |s: &str, key: &str| -> Option<(String, usize)> {
+        let k = s.find(&format!("\"{key}\""))?; let r = &s[k + key.len() + 2..];
+        let a = r.find('"')? + 1; let b = r[a..].find('"')? + a;
+        Some((r[a..b].to_string(), k + key.len() + 2 + b + 1))
+    };
+    let mut out = std::collections::HashMap::new(); let mut s = body.as_str();
+    while let Some((name, e1)) = val(s, "name") {
+        s = &s[e1..];
+        if let Some((sha, e2)) = val(s, "sha") { out.insert(name, sha); s = &s[e2..]; } else { break; }
+    }
+    if out.is_empty() { return Err("empty listing".into()); }
+    Ok(out)
+}
 
 // ---------------------------------------------------------------- catalogue
 
@@ -256,7 +289,13 @@ fn run_job(item: Item, idx: usize, dats: PathBuf, prog: Arc<Mutex<Progress>>) {
         let _ = fs::remove_dir_all(&stage); let _ = fs::remove_file(&part);
         return fail(format!("The download is damaged ({e}). Try again."));
     }
+    let sha = blob_sha(&part);
     if let Err(e) = merge(&stage, &dats) { return fail(format!("Could not copy files into {}: {e}", dats.display())); }
+    if let Some(sha) = sha {
+        let vf = ver_file(&dats, &item);
+        if let Some(d) = vf.parent() { let _ = fs::create_dir_all(d); }
+        let _ = fs::write(vf, sha);
+    }
     let _ = fs::remove_dir_all(&stage); let _ = fs::remove_file(&part);
     if let Some(m) = item.marker {
         let md = dats.join(item.folder).join(".installall");
@@ -295,6 +334,7 @@ struct App {
     pivot_dirty: bool,
     pivot_msg: Option<(bool, String)>,
     on: Vec<String>,           // overlays switched on in pivot.ini (re-read every 2 s)
+    remote: Arc<Mutex<Option<std::collections::HashMap<String, String>>>>,  // GitHub's sha per download
     on_read: Instant,
 }
 
@@ -315,12 +355,27 @@ impl App {
         if let Some(r) = &root { let _ = fs::remove_dir_all(dats_dir(r).join(".installall")); }
         App { items, root, root_note: note, browser: None, queue: VecDeque::new(), active: None, last: vec![None; n],
               screen: Screen::Main, pivot: None, pivot_inactive: vec![], pivot_dirty: false, pivot_msg: None,
-              on: vec![], on_read: Instant::now() - std::time::Duration::from_secs(10) }
+              on: vec![], on_read: Instant::now() - std::time::Duration::from_secs(10), remote: Arc::new(Mutex::new(None)) }
     }
 
     fn refresh_on(&mut self) {
         self.on = self.root.as_ref().map(|r| PivotIni::load(&pivot_ini(r)).overlays).unwrap_or_default();
         self.on_read = Instant::now();
+    }
+
+    /// ask GitHub (in the background) which downloads changed
+    fn check_updates(&self) {
+        let r = self.remote.clone();
+        std::thread::spawn(move || { if let Ok(m) = remote_shas() { *r.lock().unwrap() = Some(m); } });
+    }
+
+    /// downloaded, and GitHub has a different file now (or we can't tell which one is installed)
+    fn update_avail(&self, i: usize) -> bool {
+        let Some(root) = &self.root else { return false };
+        if !self.installed(i) { return false; }
+        let it = &self.items[i];
+        let Some(remote) = self.remote.lock().ok().and_then(|m| m.as_ref().and_then(|m| m.get(it.file).cloned())) else { return false };
+        fs::read_to_string(ver_file(&dats_dir(root), it)).map(|s| s.trim() != remote).unwrap_or(true)
     }
 
     fn is_on(&self, folder: &str) -> bool { self.on.iter().any(|o| o.eq_ignore_ascii_case(folder)) }
@@ -439,8 +494,10 @@ impl App {
                         if ui.add_enabled(enabled, egui::Button::new(if on { "Disable" } else { "Enable" }).min_size(egui::vec2(90.0, 0.0))).clicked() { self.set_on("AutoHD", !on); }
                         if on { ui.colored_label(Color32::from_rgb(90, 200, 120), "enabled"); } else { ui.weak("disabled"); }
                     }
-                    if n < 7 && ui.add_enabled(enabled, egui::Button::new("Download all races")).clicked() {
-                        for i in RACES { if !self.installed(i) { self.enqueue(i); } }
+                    let todo: Vec<usize> = RACES.filter(|&i| !self.installed(i) || self.update_avail(i)).collect();
+                    let label = if n < 7 { "Download all races" } else { "Update all races" };
+                    if !todo.is_empty() && ui.add_enabled(enabled, egui::Button::new(label)).clicked() {
+                        for i in todo { self.enqueue(i); }
                     }
                 });
             }).body(|ui| {
@@ -489,6 +546,7 @@ impl App {
                 } else {
                     ui.weak("\u{2714} downloaded, disabled");
                 }
+                if self.update_avail(i) { ui.colored_label(Color32::from_rgb(230, 190, 90), "update available"); }
             } else {
                 ui.weak("not downloaded");
             }
@@ -498,12 +556,16 @@ impl App {
         if matches!(self.last[i], Some(Phase::Failed(_))) || !self.installed(i) || busy {
             let label = if matches!(self.last[i], Some(Phase::Failed(_))) { "Retry" } else { "Download" };
             if ui.add_enabled(enabled && !busy, egui::Button::new(label).min_size(size)).clicked() { self.enqueue(i); }
-        } else if self.items[i].marker.is_none() {
-            let folder = self.items[i].folder;
-            let on = self.is_on(folder);
-            if ui.add_enabled(enabled, egui::Button::new(if on { "Disable" } else { "Enable" }).min_size(size)).clicked() { self.set_on(folder, !on); }
         } else {
-            ui.label("");
+            let upd = self.update_avail(i);
+            ui.horizontal(|ui| {
+                if self.items[i].marker.is_none() {
+                    let folder = self.items[i].folder;
+                    let on = self.is_on(folder);
+                    if ui.add_enabled(enabled, egui::Button::new(if on { "Disable" } else { "Enable" }).min_size(size)).clicked() { self.set_on(folder, !on); }
+                }
+                if upd && ui.add_enabled(enabled, egui::Button::new(RichText::new("Update").color(Color32::from_rgb(230, 190, 90))).min_size(size)).clicked() { self.enqueue(i); }
+            });
         }
     }
 
@@ -693,6 +755,7 @@ impl eframe::App for Shell {
         });
         a.ui_browser(ctx);
         if a.active.is_some() || !a.queue.is_empty() { ctx.request_repaint_after(Duration::from_millis(100)); }
+        else { ctx.request_repaint_after(Duration::from_secs(1)); }   // pivot.ini and update check land without input
 
         // INSTALLALL_SHOT=out.ppm[,pivot][,browse][,queue:0:5]: render a screenshot and exit (docs/tests)
         if let Some(spec) = self.shot.clone() {
@@ -732,6 +795,6 @@ fn main() -> eframe::Result<()> {
     eframe::run_native("Install ALL! (HD + Cow + Jelly)", opts, Box::new(move |cc| {
         cc.egui_ctx.set_visuals(egui::Visuals::dark());
         cc.egui_ctx.style_mut(|s| { s.spacing.button_padding = egui::vec2(10.0, 5.0); });
-        Ok(Box::new(Shell { app: App::new(), frame: 0, shot, t0: Instant::now(), fired: false }))
+        Ok(Box::new(Shell { app: { let a = App::new(); a.check_updates(); a }, frame: 0, shot, t0: Instant::now(), fired: false }))
     }))
 }
